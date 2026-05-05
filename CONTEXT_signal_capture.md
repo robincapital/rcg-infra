@@ -1,6 +1,6 @@
 # RCG Signal Capture — CONTEXT
-**Last updated:** 2026-04-29
-**Status:** Phase 2A Sessions 1+2 complete (storage layer + signals DB live)
+**Last updated:** 2026-05-05
+**Status:** Phase 2A Sessions 1–3 complete; Session 4 in progress (backup + lifecycle + Sharadar mirror live; Bloomberg-to-GCS pending)
 
 ---
 
@@ -107,8 +107,8 @@ production daily.
 |---|---|---|
 | 1 | GCP project, bucket, service account, ADC on Windows + NixOS, Python venv | ✅ DONE |
 | 2 | Postgres on NixOS, signals DB schema, `signals_db.py` API | ✅ DONE |
-| 3 | `storage.py` GCS abstraction, `screener_capture_patch.py` for capture in screener | NEXT |
-| 4 | Sharadar parallel mirror to GCS, Bloomberg-to-GCS replacement, GitHub repo + initial commit | TBD |
+| 3 | `storage.py` GCS abstraction, `screener_capture_patch.py` for capture in screener | ✅ DONE |
+| 4 | DB backup → GCS, lifecycle policy, Sharadar GCS mirror, GitHub repo, Bloomberg-to-GCS | 🟡 IN PROGRESS (Bloomberg pending) |
 | 5 | End-to-end validation, 24h observation, shadow-run period begins | TBD |
 
 After Session 5: shadow run for 1 week → Phase 2B (Tier 2 enriched signals + short-term alpha).
@@ -203,13 +203,127 @@ After Session 5: shadow run for 1 week → Phase 2B (Tier 2 enriched signals + s
 
 ---
 
+## Session 3 log (2026-04-29 → 2026-05-05) — DONE
+
+### What got deployed
+- **`storage.py`** — GCS abstraction with local fallback, cache at `/tmp/rcg-cache/` (24h TTL).
+  Public API: `read_parquet`, `write_parquet`, `read_text`, `write_text`, `write_blob`,
+  `write_local_file`, `exists`, `health_check`. Env vars `RCG_GCS_BUCKET`,
+  `RCG_LOCAL_FALLBACK`, `RCG_CACHE_DIR`.
+- **`screener_capture_patch.py`** — monkeypatches `screener.apply_blended_targets`
+  (per-ticker capture after blend) and `screener.main` (record_run / finalize_run).
+  Captures ~20 numeric + ~3 string + 1 JSON per ticker, plus `_MARKET` row with
+  regime z-scores/labels and dynamic weights. Best-effort throughout, never blocks.
+- **`run_screener.py`** — `CAPTURE_SIGNALS = True` flag + install block calling
+  `cap.install(screener_module=screener, config={...})`.
+
+### Key blocker resolved (Jupyter kernel rebuild)
+Cell 4 runs in the JupyterLab kernel (not the Phase 2A venv). The kernel is built by a
+uv2nix flake at `/home/nixos/nixos/jupyter/`. The kernel was Python 3.12 but didn't have
+`psycopg` or `google-cloud-storage`. Pip-installing in the venv-rcg-prod was useless —
+ABI mismatch (3.11 vs 3.12 wheels).
+
+**Fix:** added `psycopg[binary]>=3.3.0`, `google-cloud-storage>=3.0.0`, and `anthropic`
+to the flake's `pyproject.toml`, ran `nix flake update` (bumped nixpkgs from 2025-02-01
+to 2026-04-27 to fix a `pep600.nix` manylinux-tag issue), `nix build`, then restarted
+the JupyterLab process. Kernel now imports `psycopg 3.3.3` and `google.cloud.storage 3.10.1`
+natively.
+
+### Verification (2026-05-05)
+- 7 runs captured in Postgres
+- 100,520 total signals across all runs
+- Latest run (run_id=7): 16,114 signals across 753 distinct tickers (full universe,
+  not just top-40 — much wider than originally projected)
+- ~21 signals per ticker; key fields: industry, sector, marketcap, revenue/ebitda/fcf/debt
+  trends, RSI/SMA-cross/momentum/sentiment scores, quality_score, PT engine outputs
+  (upside_score, upside_pct, pt_source, target_price, pt_breakdown, gates_fired)
+- `_MARKET` row carries regime + dynamic weights
+
+### Known data-quality issues (deferred — Phase 2D pre-work)
+- `started_at`, `n_tickers_in` fields are `None` on every run — either `record_run`
+  isn't setting them or `get_recent_runs` isn't selecting them. Doesn't affect capture
+  correctness, just metadata completeness.
+- `analyst_target_mean` populated on only 78 / 753 names (matches the known Phase 1
+  limitation: only top-80 fundamental candidates get Finnhub fetches).
+- Slight signal-count drift across rows (752 / 703 / 595) — likely tickers missing
+  certain data series; needs a low-cost audit before performance attribution begins.
+
+---
+
+## Session 4 log (2026-04-30 → 2026-05-05) — IN PROGRESS
+
+### What got deployed (May 5)
+
+**1. Nightly Postgres → GCS backup, declarative**
+- Added `signalsBackupScript` derivation + `systemd.services.rcg-signals-backup` +
+  `systemd.timers.rcg-signals-backup` to `/etc/nixos/claude-finance.nix`.
+- Schedule: `*-*-* 03:00:00 America/New_York`, `Persistent = true`.
+- Script uses `pg_dump --format=custom --compress=9` piped directly to
+  `gcloud storage cp -`, no local temp file.
+- Log at `/var/log/rcg/signals-backup.log`.
+- Script paths are explicit nix-store references (`${pkgs.postgresql_16}/bin/pg_dump`,
+  `${pkgs.google-cloud-sdk}/bin/gcloud`) — no PATH dependency.
+- The earlier ad-hoc copy at `/var/rcg/scripts/rcg-signals-backup.sh` was deleted
+  to remove drift risk.
+- First manual run: 11s, 1.55 MB dump landed at
+  `gs://rcg-prod-data/db_backups/year=2026/month=05/rcg_signals_20260505T164630Z.dump`.
+
+**2. GCS lifecycle policy on `db_backups/`**
+- 30-day retention, applied via `gcloud storage buckets update --lifecycle-file=...`.
+- Lifecycle config lives as `gcs-lifecycle-db-backups.json` in the staging dir;
+  reapplied with `CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT=` because lifecycle
+  needs `storage.admin` (the SA only has `storage.objectAdmin`; user is project
+  Owner so direct-auth bypass works).
+
+**3. Sharadar parallel mirror to GCS**
+- Extended the existing `downloadScript` in `claude-finance.nix` (the daily
+  Mon–Fri 04:20 ET service) with a post-store loop that uploads each parquet to
+  `gs://rcg-prod-data/sharadar/<table>/year=YYYY/month=MM/day=DD/<table>.parquet`.
+- Loop is non-blocking (each `gcloud cp` wrapped in `if/else`, failures counted but
+  don't kill the script).
+- Backfilled today's 13 tables manually (1.57 GB) to validate before the next
+  scheduled run; tomorrow's 04:20 ET run is the integrated test.
+
+**4. Private GitHub repo**
+- Repo: `https://github.com/robincapital/rcg-infra`.
+- Scope: production code only (per user decision) — `/home/nixos/Prod/V1/src/`,
+  `/sql/`, top-level `CONTEXT_*.md`, `docs/`, `jupyter_cell_4_v2.py`, `watchlist.json`.
+  Excluded: notebooks, runtime JSON state (factor_signals*.json,
+  bloomberg_prices.json, refresh_status.json), generated outputs, `.bak` files,
+  `Decom.Old/`, `QuantxAI/`.
+- Initial commit: `3dc2763` (22 files).
+- Auth: fine-grained PAT stored at `~/.git-credentials` via `credential.helper store`.
+  PAT scoped to `rcg-infra` only (Contents: read+write).
+
+**5. Known acceptance: hardcoded Finnhub API key**
+- `src/dynamic_factor_screener_v3.py:1034` and `src/sentiment_refresh_server.py:23`
+  contain a hardcoded Finnhub key. User chose to commit as-is and defer the
+  refactor. Same key is also in the user's crontab and bash history. Repo is
+  private. Rotation + env-var refactor is a follow-up.
+
+### Pending in Session 4
+- **Bloomberg-to-GCS replacement** — Windows-side (Bloomberg terminal lives there).
+  Existing local-disk write needs to also push to `gs://rcg-prod-data/bloomberg/`.
+  Requires user to drive the Bloomberg session.
+- **ADC reauth** — `gcloud auth application-default login` was attempted but didn't
+  save (the user only completed `gcloud auth login`). Not blocking anything currently;
+  CLI auth is enough for the backup + Sharadar uploads. Needed before any Python SDK
+  work that hits GCS (`storage.py` writes, etc.).
+
+---
+
 ## Open items
 - [x] Session 2: Postgres install (NixOS service), schema design, `signals_db.py`
-- [ ] Session 3: `storage.py` (GCS abstraction reading existing local fallback for transition),
-       `screener_capture_patch.py`, integration into existing `run_screener.py`
-- [ ] Session 4: Sharadar parallel mirror cron, Bloomberg-to-GCS replacement on Windows,
-       GitHub repo + initial commit (Nick to create the repo URL ahead of Session 4)
+- [x] Session 3: `storage.py`, `screener_capture_patch.py`, integration into `run_screener.py`,
+       Jupyter kernel rebuild for psycopg/google-cloud-storage
+- [x] Session 4 (partial): nightly Postgres → GCS backup + 30-day lifecycle, Sharadar
+       parallel mirror to GCS, GitHub repo + initial commit
+- [ ] Session 4 (remaining): Bloomberg-to-GCS replacement on Windows
+- [ ] Session 4 (cleanup): ADC reauth on NixOS (only when first Python SDK call needed),
+       Finnhub key rotation + env-var refactor
 - [ ] Session 5: end-to-end smoke test, 24h shadow observation
+- [ ] Data-quality audit: investigate `started_at`/`n_tickers_in` None values, signal-count
+       drift across runs (precondition for Phase 2D attribution)
 - [ ] Phase 2B (after shadow week): `enriched_prices.py` + `short_term_alpha.py`
 - [ ] Phase 2C: Tier 3 Bloomberg intraday expansion + trading book separation
 - [ ] Phase 2D: performance attribution engine + walk-forward weight calibration
