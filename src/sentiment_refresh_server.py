@@ -52,7 +52,7 @@ def run_refresh():
         try:
             result = subprocess.run(
                 ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
-                 "ndiaz@100.87.212.98",
+                 "ndiaz@100.86.90.78",
                  "python C:\\Users\\ndiaz\\Downloads\\bloomberg_prices.py"],
                 capture_output=True, text=True, timeout=60
             )

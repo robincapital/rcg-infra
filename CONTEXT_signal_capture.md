@@ -1,6 +1,6 @@
 # RCG Signal Capture — CONTEXT
 **Last updated:** 2026-05-05
-**Status:** Phase 2A Sessions 1–3 complete; Session 4 in progress (backup + lifecycle + Sharadar mirror live; Bloomberg-to-GCS pending)
+**Status:** Phase 2A Sessions 1–4 complete; Session 5 (shadow observation) ongoing implicitly
 
 ---
 
@@ -108,8 +108,8 @@ production daily.
 | 1 | GCP project, bucket, service account, ADC on Windows + NixOS, Python venv | ✅ DONE |
 | 2 | Postgres on NixOS, signals DB schema, `signals_db.py` API | ✅ DONE |
 | 3 | `storage.py` GCS abstraction, `screener_capture_patch.py` for capture in screener | ✅ DONE |
-| 4 | DB backup → GCS, lifecycle policy, Sharadar GCS mirror, GitHub repo, Bloomberg-to-GCS | 🟡 IN PROGRESS (Bloomberg pending) |
-| 5 | End-to-end validation, 24h observation, shadow-run period begins | TBD |
+| 4 | DB backup → GCS, lifecycle policy, Sharadar GCS mirror, GitHub repo, Bloomberg-to-GCS, refresh-button pipeline | ✅ DONE |
+| 5 | End-to-end validation, 24h observation, shadow-run period begins | 🟡 IMPLICITLY ONGOING (live runs accumulating) |
 
 After Session 5: shadow run for 1 week → Phase 2B (Tier 2 enriched signals + short-term alpha).
 
@@ -301,14 +301,41 @@ natively.
   refactor. Same key is also in the user's crontab and bash history. Repo is
   private. Rotation + env-var refactor is a follow-up.
 
-### Pending in Session 4
-- **Bloomberg-to-GCS replacement** — Windows-side (Bloomberg terminal lives there).
-  Existing local-disk write needs to also push to `gs://rcg-prod-data/bloomberg/`.
-  Requires user to drive the Bloomberg session.
-- **ADC reauth** — `gcloud auth application-default login` was attempted but didn't
-  save (the user only completed `gcloud auth login`). Not blocking anything currently;
-  CLI auth is enough for the backup + Sharadar uploads. Needed before any Python SDK
-  work that hits GCS (`storage.py` writes, etc.).
+**6. Bloomberg-to-GCS pipeline + refresh button (May 5)**
+- `bloomberg_prices.py` (lives on Windows at `C:\Users\ndiaz\Downloads\`) extended
+  with a third destination: in addition to local Dropbox JSON + SCP to NixOS, it now
+  uploads the same JSON to `gs://rcg-prod-data/bloomberg/intraday/year=YYYY/month=MM/day=DD/bloomberg_prices_TIMESTAMP.json`.
+  Each stage is independent (try/except wrapped) — Dropbox + SCP keep working even
+  if GCS upload fails.
+- **Windows Task Scheduler** entry `RCG-Bloomberg-Prices` runs the script every 30
+  min, 09:00–17:00 daily (Sat/Sun no-op since Bloomberg has no fresh data).
+  Logon mode: Interactive only (Bloomberg API needs the user logged in).
+- **NixOS → Windows SSH** set up: OpenSSH Server installed via
+  `Add-WindowsCapability`, firewall rule scoped to the Tailscale interface, NixOS's
+  `id_ed25519` pubkey added to `C:\ProgramData\ssh\administrators_authorized_keys`
+  (admins file because `ndiaz` is a local Administrator). ACL locked down per
+  Windows OpenSSH requirements. Windows Tailscale IP: `100.86.90.78`.
+- **`sentiment_refresh_server.py`** now runs as a declarative systemd service
+  (`rcg-sentiment-refresh.service`, port 8085, `wantedBy = multi-user.target` so
+  auto-starts on boot). The wrapper script prepends `${pkgs.openssh}/bin` to PATH
+  so subprocess `ssh` calls work, and uses `python3 -u` for unbuffered logs.
+  Stale hardcoded Windows IP (was `100.87.212.98`) updated to `100.86.90.78`.
+- **End-to-end smoke test passed**: refresh button → server → SSH-to-Windows →
+  bloomberg_prices.py runs (16s) → SCP back + GCS upload → sentiment_bbg.py runs →
+  fresh `factor_signals_bbg.json` + HTML in 20s total.
+
+### Pending Session 4 polish (low priority)
+- **ADC reauth** — `gcloud auth application-default login` on NixOS was attempted
+  but didn't save. Not blocking anything currently; CLI auth is enough for the
+  backup + Sharadar uploads. Needed before any Python SDK work that hits GCS
+  (`storage.py` writes, etc.).
+- **Finnhub key rotation + env-var refactor** — see Session 4.5 above. Same key
+  is hardcoded in `sentiment_refresh_server.py:23` (which is now part of the
+  systemd unit's runtime). No change in exposure surface vs before this session.
+- **`bloomberg_prices.py` not in rcg-infra repo** — the user chose
+  "production code only" scope and the script lives on Windows, so it stays
+  out-of-tree for now. If Windows machine fails, the script is recoverable
+  from Dropbox sync. Worth committing later for full version control.
 
 ---
 
@@ -316,11 +343,12 @@ natively.
 - [x] Session 2: Postgres install (NixOS service), schema design, `signals_db.py`
 - [x] Session 3: `storage.py`, `screener_capture_patch.py`, integration into `run_screener.py`,
        Jupyter kernel rebuild for psycopg/google-cloud-storage
-- [x] Session 4 (partial): nightly Postgres → GCS backup + 30-day lifecycle, Sharadar
-       parallel mirror to GCS, GitHub repo + initial commit
-- [ ] Session 4 (remaining): Bloomberg-to-GCS replacement on Windows
+- [x] Session 4: nightly Postgres → GCS backup + 30-day lifecycle, Sharadar parallel
+       mirror to GCS, GitHub repo + initial commit, Bloomberg-to-GCS pipeline,
+       hourly Task Scheduler, NixOS↔Windows SSH, refresh-button systemd service,
+       end-to-end smoke test
 - [ ] Session 4 (cleanup): ADC reauth on NixOS (only when first Python SDK call needed),
-       Finnhub key rotation + env-var refactor
+       Finnhub key rotation + env-var refactor, bloomberg_prices.py to repo
 - [ ] Session 5: end-to-end smoke test, 24h shadow observation
 - [ ] Data-quality audit: investigate `started_at`/`n_tickers_in` None values, signal-count
        drift across runs (precondition for Phase 2D attribution)
