@@ -1,0 +1,15 @@
+{
+  "tickers": ["SPY", "QBTS", "ONDS", "NVDA", "TSLA", "SERV"],
+  "lookback_bars": 10,
+  "lookback_override": {
+    "SPY": 20
+  },
+  "notes": {
+    "SPY":  "Macro — 20-bar lookback",
+    "QBTS": "Quantum computing — high beta",
+    "ONDS": "Ondas Holdings — small cap speculative",
+    "NVDA": "AI proxy — liquid",
+    "TSLA": "Risk barometer — high beta",
+    "SERV": "Serve Robotics — small cap speculative"
+  }
+}

@@ -1,0 +1,54 @@
+# data
+*.parquet
+*.csv
+*.zip
+
+# generated outputs
+outputs/
+*.pdf
+*.html
+
+# notebooks (per scope decision: prod code only)
+*.ipynb
+.ipynb_checkpoints/
+
+# old archive
+Decom.Old/
+QuantxAI/
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.pytest_cache/
+
+# env / secrets
+.env
+*.env
+.envrc
+
+# logs
+*.log
+
+# editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# venvs
+venv/
+.venv/
+
+# runtime state / outputs (Mar-May 2026 sweep)
+src/bloomberg_prices.json
+src/factor_signals.json
+src/factor_signals_bbg.json
+src/refresh_status.json
+src/CONTEXT_signal_capture.md
+
+# editor/swap backups
+*.bak
