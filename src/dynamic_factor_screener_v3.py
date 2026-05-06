@@ -2166,6 +2166,158 @@ function toggleValPanel(i) {{
 
 
 # ============================================================
+# LIVE BBG OVERLAY (injected into screener HTML)
+# ============================================================
+def _build_live_overlay_block(eod_map: dict, run_time: str) -> str:
+    """
+    HTML+CSS+JS block injected before </body> in dynamic_factor_screener.html.
+
+    On dashboard load (and every 5 min), JS fetches bloomberg_prices.json (served
+    from same origin / port 8080), computes intraday move% vs the embedded EOD
+    closes, computes intraday RSI from BBG hourly bars, and renders:
+      - macro banner: SPY / VIX / TLT live + intraday %
+      - top-5 movers across the screener's top-40 (by abs intraday move)
+
+    EOD closes are embedded as a JSON literal so JS doesn't have to re-parse
+    long_screener_results.csv.
+    """
+    import json as _json_local
+    eod_json = _json_local.dumps(eod_map)
+    return f"""
+<style>
+  #live-overlay {{ position: fixed; top: 0; left: 0; right: 0; background: #0a0a0a;
+    color: #f0f0f0; padding: 0.5rem 1rem; font-family: monospace; font-size: 11px;
+    border-bottom: 2px solid #c9a84c; z-index: 9999;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.5); }}
+  #live-overlay .row {{ display: flex; gap: 1.5rem; align-items: center; flex-wrap: wrap; }}
+  #live-overlay .label {{ color: #c9a84c; font-weight: bold; }}
+  #live-overlay .age {{ color: #888; }}
+  #live-overlay .up {{ color: #00c97a; }}
+  #live-overlay .down {{ color: #ff4d4d; }}
+  #live-overlay button {{ background: #c9a84c; color: #0d0d0d; border: none;
+    padding: 3px 10px; cursor: pointer; font-family: inherit; font-size: 11px; }}
+  #live-overlay button:hover {{ background: #e0bc5c; }}
+  #live-movers {{ display: flex; gap: 0.5rem; flex-wrap: wrap; max-height: 75px;
+    overflow-y: auto; }}
+  #live-movers .ticker-block {{ background: #1a1a1a; padding: 0.2rem 0.5rem;
+    border-radius: 3px; min-width: 110px; }}
+  body {{ padding-top: 105px; }}
+</style>
+<div id="live-overlay">
+  <div class="row">
+    <span class="label">LIVE BBG</span>
+    <span id="live-age" class="age">loading…</span>
+    <span>SPY <span id="live-spy">—</span> <span id="live-spy-pct"></span></span>
+    <span>VIX <span id="live-vix">—</span> <span id="live-vix-pct"></span></span>
+    <span>TLT <span id="live-tlt">—</span> <span id="live-tlt-pct"></span></span>
+    <button id="live-refresh-btn" style="margin-left:auto">Refresh</button>
+  </div>
+  <div class="row" style="margin-top:0.3rem;">
+    <span class="label">TOP MOVERS</span>
+    <div id="live-movers"><i>loading…</i></div>
+  </div>
+</div>
+<script>
+(function() {{
+  const PRICES_URL = '/bloomberg_prices.json';
+  const REFRESH_MS = 5 * 60 * 1000;
+  const SCREENER_RUN_TIME = "{run_time}";
+  const EOD = {eod_json};
+
+  function fmt(v, d=2) {{ return v == null ? '—' : Number(v).toFixed(d); }}
+  function fmtPct(v) {{
+    if (v == null || !isFinite(v)) return '';
+    const sign = v >= 0 ? '+' : '';
+    return ` ${{sign}}${{(v*100).toFixed(2)}}%`;
+  }}
+  function ageStr(ts) {{
+    if (!ts) return 'no data';
+    const m = Math.floor((Date.now() - new Date(ts).getTime()) / 60000);
+    if (m < 1) return 'fresh';
+    if (m < 60) return `${{m}}m ago`;
+    return `${{Math.floor(m/60)}}h${{m%60}}m ago`;
+  }}
+  function intraRsi(bars, period=14) {{
+    if (!bars || bars.length < period+1) return null;
+    const c = bars.map(b => b.close);
+    let g=0, l=0;
+    for (let i = c.length - period; i < c.length; i++) {{
+      const d = c[i] - c[i-1];
+      if (d > 0) g += d; else l += -d;
+    }}
+    if (l === 0) return 100;
+    const rs = (g/period) / (l/period);
+    return 100 - (100 / (1 + rs));
+  }}
+  function setPctEl(id, pct) {{
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (pct == null) {{ el.textContent = ''; return; }}
+    el.textContent = fmtPct(pct);
+    el.className = pct >= 0 ? 'up' : 'down';
+  }}
+
+  async function refresh() {{
+    try {{
+      const r = await fetch(PRICES_URL + '?_=' + Date.now(), {{cache: 'no-cache'}});
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      const tickers = data.tickers || {{}};
+      const watchlist = data.watchlist || {{}};
+
+      document.getElementById('live-age').textContent = ageStr(data.generated_at);
+
+      const spy = tickers.SPY || {{}};
+      const vix = tickers.VIX || {{}};
+      const tlt = tickers.TLT || {{}};
+      document.getElementById('live-spy').textContent = spy.price ? `$${{fmt(spy.price)}}` : '—';
+      document.getElementById('live-vix').textContent = vix.vix ? fmt(vix.vix) : '—';
+      document.getElementById('live-tlt').textContent = tlt.tlt ? `$${{fmt(tlt.tlt)}}` : '—';
+      // intraday move% for macros: use first-bar vs last-bar within today
+      function macroPct(obj) {{
+        if (!obj.bars || obj.bars.length < 2) return null;
+        const today = obj.bars.filter(b => b.time && b.time.split(' ')[0] === obj.bars[obj.bars.length-1].time.split(' ')[0]);
+        if (today.length < 2) return null;
+        return (today[today.length-1].close - today[0].open) / today[0].open;
+      }}
+      setPctEl('live-spy-pct', macroPct(spy));
+      setPctEl('live-vix-pct', macroPct(vix));
+      setPctEl('live-tlt-pct', macroPct(tlt));
+
+      // Top movers: any watchlist ticker that has an EOD close in our screener output
+      const movers = [];
+      Object.entries(watchlist).forEach(([t, w]) => {{
+        const livePx = w.price;
+        const eod = EOD[t];
+        if (livePx == null || eod == null || eod === 0) return;
+        const move = (livePx - eod) / eod;
+        const rsi = intraRsi(w.bars);
+        movers.push({{ ticker: t, livePx, eod, move, rsi }});
+      }});
+      movers.sort((a, b) => Math.abs(b.move) - Math.abs(a.move));
+
+      const html = movers.slice(0, 8).map(m => {{
+        const cls = m.move >= 0 ? 'up' : 'down';
+        const rsiStr = m.rsi == null ? '—' : m.rsi.toFixed(0);
+        return `<div class="ticker-block"><b>${{m.ticker}}</b> $${{fmt(m.livePx)}} ` +
+               `<span class="${{cls}}">${{fmtPct(m.move)}}</span> RSI ${{rsiStr}}</div>`;
+      }}).join('');
+      document.getElementById('live-movers').innerHTML = html ||
+        '<i>no overlap with watchlist yet — next BBG run will populate</i>';
+    }} catch (e) {{
+      document.getElementById('live-age').textContent = 'fetch failed: ' + e.message;
+    }}
+  }}
+
+  document.getElementById('live-refresh-btn').addEventListener('click', refresh);
+  refresh();
+  setInterval(refresh, REFRESH_MS);
+}})();
+</script>
+"""
+
+
+# ============================================================
 # MAIN
 # ============================================================
 def main(market_cap_preset=None, fed_target_rate=None, fed_neutral_rate=None,
@@ -2337,9 +2489,73 @@ def main(market_cap_preset=None, fed_target_rate=None, fed_neutral_rate=None,
 
     html = generate_html_report(factors, weights, baseline_weights, scored, run_time,
                                 industry_medians=industry_medians, market_bias=market_bias)
+
+    # ── Live BBG overlay (Day 5+ cross-functionality) ─────────────────
+    # Inject a fixed banner that fetches bloomberg_prices.json and shows
+    # top-5 intraday movers + macro snapshot. EOD closes are embedded
+    # directly so JS doesn't need to re-parse the CSV.
+    try:
+        eod_map = {}
+        for row in scored.iter_rows(named=True):
+            t = row.get("ticker")
+            lp = row.get("last_price")
+            if t and lp is not None:
+                eod_map[t] = float(lp)
+        overlay_block = _build_live_overlay_block(eod_map, run_time)
+        if "</body>" in html:
+            html = html.replace("</body>", overlay_block + "\n</body>", 1)
+        else:
+            html += overlay_block
+    except Exception as _e:
+        print(f"  [WARN] Live overlay injection skipped: {_e}")
+
     html_path = output_dir / "dynamic_factor_screener.html"
     html_path.write_text(html)
     print(f"  HTML report: {html_path.resolve()}")
+
+    # ── Watchlist auto-update (top-40 + macros) ───────────────────────
+    try:
+        macro = ["SPY", "VIX", "TLT"]
+        top_tickers_for_bbg = scored["ticker"].to_list()
+        final_watchlist = list(dict.fromkeys(macro + top_tickers_for_bbg))[:50]
+
+        notes = {"SPY": "Macro proxy", "VIX": "Volatility regime", "TLT": "Long-rate regime"}
+        for row in scored.iter_rows(named=True):
+            t = row.get("ticker")
+            if not t:
+                continue
+            sect = row.get("sector") or ""
+            score = row.get("composite_score")
+            score_str = f"{score:.2f}" if score is not None else "?"
+            notes[t] = f"{sect} | composite {score_str}"
+
+        watchlist_obj = {
+            "tickers":           final_watchlist,
+            "lookback_bars":     10,
+            "lookback_override": {"SPY": 20},
+            "notes":             notes,
+            "generated_at":      run_time,
+            "source":            "dynamic_factor_screener_v3 top-N + macros",
+        }
+
+        watchlist_local = output_dir / "watchlist.json"
+        watchlist_local.write_text(_json.dumps(watchlist_obj, indent=2, default=str))
+        print(f"  Watchlist (local): {watchlist_local.resolve()} ({len(final_watchlist)} tickers)")
+
+        import subprocess as _sp
+        scp_dest = "ndiaz@rcg-base:C:/Users/ndiaz/Dropbox/RCG_2020/watchlist.json"
+        scp_result = _sp.run(
+            ["scp", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes",
+             "-o", "StrictHostKeyChecking=accept-new",
+             str(watchlist_local), scp_dest],
+            capture_output=True, text=True, timeout=30,
+        )
+        if scp_result.returncode == 0:
+            print(f"  Watchlist SCP -> Windows OK ({scp_dest})")
+        else:
+            print(f"  [WARN] Watchlist SCP failed: {scp_result.stderr.strip()[:200]}")
+    except Exception as _e:
+        print(f"  [WARN] Watchlist auto-update skipped: {_e}")
 
     if __name__ == "__main__" and not _is_notebook():
         import http.server

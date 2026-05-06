@@ -1,0 +1,1127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RCG Live Trading</title>
+<style>
+  :root {
+    --bg: #0a0a0a; --panel: #131313; --panel2: #1a1a1a; --border: #262626;
+    --text: #f0f0f0; --dim: #888; --gold: #c9a84c; --gold2: #e0bc5c;
+    --green: #00c97a; --green-bright: #2eff9c; --red: #ff4d4d; --red-bright: #ff6b6b;
+    --orange: #ff9933; --yellow: #f0d94c; --blue: #4ca3ff; --purple: #a663ff;
+    /* inferno-style palette for charts (light-to-dark warm colormap) */
+    --inf-1: #fcffa4;  /* near-white cream */
+    --inf-2: #fbe89c;  /* light yellow */
+    --inf-3: #f6a000;  /* amber */
+    --inf-4: #ed6826;  /* orange-red */
+    --inf-5: #d33d62;  /* pink-red */
+    --inf-6: #b83270;  /* magenta */
+    --inf-7: #931f5e;  /* deep magenta */
+    --inf-8: #5d125e;  /* purple */
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+         font-size: 13px; line-height: 1.4; }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { color: var(--gold2); }
+  .header { position: sticky; top: 0; background: var(--panel); border-bottom: 2px solid var(--gold);
+           padding: 0.6rem 1rem; z-index: 20; box-shadow: 0 2px 8px rgba(0,0,0,0.6); }
+  .header-row { display: flex; gap: 1.2rem; align-items: center; flex-wrap: wrap; }
+  .header h1 { margin: 0; font-size: 16px; color: var(--gold); letter-spacing: 1px; }
+  .macro-chip { background: var(--panel2); padding: 0.2rem 0.7rem; border-radius: 4px;
+                font-family: monospace; font-size: 12px; }
+  .macro-chip .lbl { color: var(--dim); margin-right: 0.4rem; }
+  .age { color: var(--dim); font-family: monospace; font-size: 11px; }
+  .nav-link { color: var(--dim); font-size: 12px; padding: 0.2rem 0.5rem; border-radius: 3px; }
+  .nav-link:hover { background: var(--panel2); color: var(--gold2); }
+  button.refresh-btn { background: var(--gold); color: #0d0d0d; border: none; padding: 5px 12px;
+                       border-radius: 3px; cursor: pointer; font-weight: bold; font-size: 11px; }
+  button.refresh-btn:hover { background: var(--gold2); }
+  button.refresh-btn:disabled { background: #444; cursor: wait; }
+
+  .container { display: grid; grid-template-columns: minmax(420px, 1fr) 2.4fr; gap: 1rem; padding: 1rem; align-items: start; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+           display: flex; flex-direction: column; max-height: calc(100vh - 110px); }
+  .panel h2 { margin: 0; padding: 0.6rem 1rem; border-bottom: 1px solid var(--border);
+             font-size: 13px; color: var(--gold); letter-spacing: 0.5px; text-transform: uppercase; flex-shrink: 0; }
+  .legend { padding: 0.4rem 1rem; font-size: 10px; color: var(--dim);
+            border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .table-wrap { overflow-y: auto; overflow-x: auto; flex: 1; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: right; vertical-align: middle; white-space: nowrap; }
+  th { background: var(--panel2); color: var(--dim); font-weight: 600; text-align: right;
+       position: sticky; top: 0; z-index: 5; user-select: none; cursor: pointer; }
+  th:hover { color: var(--gold); }
+  th.sorted { color: var(--gold); }
+  th.sorted::after { content: " ↓"; }
+  th.sorted.asc::after { content: " ↑"; }
+  th:first-child, td:first-child { text-align: left; }
+  th.tkr-col, td.tkr { text-align: left; }
+  tr:hover td { background: rgba(201,168,76,0.05); }
+  tr.detail-row td { background: var(--panel2); padding: 0.6rem 1rem; white-space: normal; cursor: default; }
+  tr.detail-row td:hover { background: var(--panel2); }
+  td.tkr { font-family: monospace; font-weight: bold; color: var(--text); cursor: pointer; user-select: text; }
+  td.tkr:hover { color: var(--gold); }
+  .up { color: var(--green); }
+  .up-strong { color: var(--green-bright); font-weight: bold; }
+  .down { color: var(--red); }
+  .down-strong { color: var(--red-bright); font-weight: bold; }
+  .neutral { color: var(--dim); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 10px;
+           font-weight: bold; letter-spacing: 0.5px; text-transform: uppercase; min-width: 80px; text-align: center; }
+  .badge-pre { background: var(--green-bright); color: #0a0a0a; }
+  .badge-breakout { background: var(--green); color: #0a0a0a; }
+  .badge-strong { background: var(--green); color: #0a0a0a; opacity: 0.85; }
+  .badge-watch { background: var(--yellow); color: #0a0a0a; }
+  .badge-weakening { background: var(--orange); color: #0a0a0a; }
+  .badge-prebreakdown { background: var(--red-bright); color: #0a0a0a; }
+  .badge-breakdown { background: var(--red); color: #fff; }
+  .badge-noise { background: var(--panel2); color: var(--dim); }
+  .signal-bars { display: inline-flex; gap: 1px; vertical-align: middle; }
+  .signal-bar { width: 4px; height: 12px; background: var(--border); border-radius: 1px; }
+  .signal-bar.bull        { background: var(--green); }
+  .signal-bar.bull.strong { background: var(--green-bright); }
+  .signal-bar.bear        { background: var(--red); }
+  .signal-bar.bear.strong { background: var(--red-bright); }
+  .pred-score        { font-family: monospace; font-weight: bold; font-size: 11px; color: var(--dim); }
+  .pred-score.bull   { color: var(--green); }
+  .pred-score.bull-strong { color: var(--green-bright); }
+  .pred-score.bear   { color: var(--red); }
+  .pred-score.bear-strong { color: var(--red-bright); }
+  .meta { padding: 0.4rem 1rem; background: var(--panel2); color: var(--dim); font-size: 10px;
+          border-top: 1px solid var(--border); border-radius: 0 0 6px 6px; flex-shrink: 0; }
+  .empty { padding: 2rem 1rem; color: var(--dim); text-align: center; font-style: italic; }
+  .loading { color: var(--gold); animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.4 } }
+
+  .detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.5rem; padding: 0.4rem 0; }
+  .detail-card { background: var(--panel); padding: 0.5rem 0.7rem; border-radius: 4px; border: 1px solid var(--border); }
+  .detail-card .lbl { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+  .detail-card .val { font-family: monospace; font-size: 13px; }
+  .detail-models { padding: 0.3rem 0; font-size: 11px; }
+  .detail-models table { width: auto; min-width: 100%; }
+  .detail-models th, .detail-models td { font-size: 11px; padding: 4px 8px; white-space: nowrap; border-bottom-color: rgba(255,255,255,0.05); cursor: default; }
+  .detail-models th { background: transparent; cursor: default; position: static; }
+  .detail-models th:hover { color: var(--dim); }
+  .gate-tag { display: inline-block; background: var(--panel); border: 1px solid var(--border); color: var(--dim);
+              padding: 1px 6px; border-radius: 3px; margin: 1px 2px; font-size: 10px; font-family: monospace; }
+  .gate-tag.cap { color: var(--orange); border-color: var(--orange); }
+  .gate-tag.clip { color: var(--blue); border-color: var(--blue); }
+  .gate-tag.drop { color: var(--red); border-color: var(--red); }
+
+  .legend .badge { cursor: pointer; transition: opacity 0.15s; opacity: 0.85; }
+  .legend .badge:hover { opacity: 1; box-shadow: 0 0 0 1px var(--text); }
+  .legend .badge.dim { opacity: 0.3; }
+  .filter-active { color: var(--gold); padding: 2px 6px; font-weight: bold; }
+  .filter-clear { cursor: pointer; color: var(--red); margin-left: 0.5rem; text-decoration: underline; }
+
+  /* ─── Chart (inferno palette) ─── */
+  .detail-top { display: grid; grid-template-columns: minmax(0, 2fr) minmax(220px, 1fr); gap: 0.6rem;
+                margin-top: 0.4rem; align-items: stretch; }
+  @media (max-width: 1100px) { .detail-top { grid-template-columns: 1fr; } }
+  .chart-wrap { background: #060306; border-radius: 4px; padding: 0.4rem;
+                border: 1px solid #1d0d1d; }
+  .chart-wrap svg { width: 100%; height: auto; display: block; font-family: monospace; font-size: 9px; }
+  .chart-wrap .price-line { fill: none; stroke: var(--inf-2); stroke-width: 1.6; }
+  .chart-wrap .sma5  { fill: none; stroke: var(--inf-4); stroke-width: 1; stroke-dasharray: 3,2; opacity: 0.9; }
+  .chart-wrap .sma20 { fill: none; stroke: var(--inf-7); stroke-width: 1; stroke-dasharray: 5,3; opacity: 0.85; }
+  .chart-wrap .vwap  { fill: none; stroke: var(--inf-3); stroke-width: 1; opacity: 0.85; }
+  .chart-wrap .sigma-band { fill: var(--inf-8); opacity: 0.18; }
+  .chart-wrap .level-line { stroke-width: 0.7; stroke-dasharray: 2,3; opacity: 0.55; }
+  .chart-wrap .level-eod  { stroke: var(--inf-7); }
+  .chart-wrap .level-hi   { stroke: var(--inf-3); }
+  .chart-wrap .level-lo   { stroke: var(--inf-5); }
+  .chart-wrap .axis text { fill: #6a4a55; font-size: 9px; }
+  .chart-wrap .live-dot { fill: var(--inf-1); stroke: #000; stroke-width: 1.5; }
+  .chart-wrap .day-divider { stroke: var(--inf-8); stroke-dasharray: 1,2; opacity: 0.35; }
+  .chart-legend-row { display: flex; gap: 0.7rem; flex-wrap: wrap; padding: 0.25rem 0.4rem 0;
+                      font-size: 9px; color: var(--dim); }
+  .chart-legend-row .swatch { display: inline-block; width: 12px; height: 0; border-top: 2px solid;
+                              vertical-align: middle; margin-right: 4px; }
+
+  /* ─── Stats panel beside the chart ─── */
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; align-content: start; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 3px;
+          padding: 5px 8px; }
+  .stat .lbl { color: var(--dim); font-size: 9px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .stat .val { font-family: monospace; font-size: 12px; font-weight: bold; color: var(--text);
+               margin-top: 2px; }
+  .stat .sub { color: var(--dim); font-size: 9px; margin-top: 1px; font-family: monospace; }
+  .stat.bull .val { color: var(--inf-2); }
+  .stat.bear .val { color: var(--inf-5); }
+
+  .pred-history { padding: 0.3rem 0; color: var(--dim); font-size: 10px; font-style: italic;
+                  border-top: 1px dashed var(--border); margin-top: 0.4rem; }
+
+  .levels-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+                  gap: 4px; padding: 0.4rem 0; }
+  .lvl-card { background: var(--panel); padding: 4px 8px; border-radius: 3px; border: 1px solid var(--border);
+              font-family: monospace; font-size: 11px; }
+  .lvl-card .lbl { color: var(--dim); font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .lvl-card .val { color: var(--text); font-weight: bold; }
+  .lvl-card.entry .val  { color: var(--green); }
+  .lvl-card.target .val { color: var(--green-bright); }
+  .lvl-card.stop .val   { color: var(--red); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-row">
+    <h1>RCG · LIVE TRADING</h1>
+    <span class="macro-chip"><span class="lbl">SPY</span><span id="m-spy">—</span> <span id="m-spy-pct"></span></span>
+    <span class="macro-chip"><span class="lbl">VIX</span><span id="m-vix">—</span> <span id="m-vix-pct"></span></span>
+    <span class="macro-chip"><span class="lbl">TLT</span><span id="m-tlt">—</span> <span id="m-tlt-pct"></span></span>
+    <span class="macro-chip" id="m-bias-chip" title="Hover for components"><span class="lbl">BIAS</span><span id="m-bias">—</span> <span id="m-bias-detail" class="age" style="margin-left:0.4rem"></span></span>
+    <span class="age" id="age">loading…</span>
+    <span style="margin-left:auto"></span>
+    <a class="nav-link" href="dynamic_factor_screener.html">Full screener →</a>
+    <a class="nav-link" href="market_sentiment_bbg.html">Macro / Sentiment →</a>
+    <button class="refresh-btn" id="refresh-btn">Force pull</button>
+  </div>
+</div>
+
+<div class="container">
+  <div class="panel">
+    <h2>Top Movers (intraday)</h2>
+    <div class="legend">Click a column header to sort. All watchlist tickers with EOD close shown.</div>
+    <div class="table-wrap">
+      <table id="movers-tbl">
+        <thead>
+          <tr>
+            <th class="tkr-col" data-col="ticker"  data-type="str">Ticker</th>
+            <th data-col="livePx"  data-type="num">Live</th>
+            <th data-col="eod"     data-type="num">EOD</th>
+            <th data-col="move"    data-type="num">Move</th>
+            <th data-col="rsi"     data-type="num">RSI</th>
+            <th data-col="volNow"  data-type="num">Vol</th>
+          </tr>
+        </thead>
+        <tbody><tr><td colspan="6" class="loading empty">loading…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="meta" id="movers-meta">—</div>
+  </div>
+
+  <div class="panel">
+    <h2>Top 40 — Fundamental + Predictive Action</h2>
+    <div class="legend">
+      Click ticker for chart + PT breakdown · click a badge to filter · <strong>Pred is signed</strong>: + bull, − bear<br>
+      <span class="badge badge-pre" data-filter="PRE-BREAKOUT">PRE-BREAKOUT</span>
+      <span class="badge badge-breakout" data-filter="BREAKOUT">BREAKOUT</span>
+      <span class="badge badge-strong" data-filter="STRONG">STRONG</span>
+      <span class="badge badge-watch" data-filter="WATCH">WATCH</span>
+      <span class="badge badge-noise" data-filter="NEUTRAL">NEUTRAL</span>
+      <span class="badge badge-weakening" data-filter="WEAKENING">WEAKENING</span>
+      <span class="badge badge-prebreakdown" data-filter="PRE-BREAKDOWN">PRE-BREAKDOWN</span>
+      <span class="badge badge-breakdown" data-filter="BREAKDOWN">BREAKDOWN</span>
+      <span id="filter-status"></span>
+    </div>
+    <div class="table-wrap">
+      <table id="top-tbl">
+        <thead>
+          <tr>
+            <th data-col="rank"      data-type="num">#</th>
+            <th class="tkr-col" data-col="ticker" data-type="str">Ticker</th>
+            <th data-col="composite" data-type="num">Comp</th>
+            <th data-col="mktcap"    data-type="num">MktCap</th>
+            <th data-col="eod"       data-type="num">EOD</th>
+            <th data-col="livePx"    data-type="num">Live</th>
+            <th data-col="move"      data-type="num">Move</th>
+            <th data-col="targetPx"  data-type="num">PT</th>
+            <th data-col="upsidePct" data-type="num">Upside</th>
+            <th data-col="rsi"       data-type="num">RSI</th>
+            <th data-col="volRatio"  data-type="num">V/ADV</th>
+            <th data-col="signedScore" data-type="num">Pred</th>
+            <th data-col="signalsScore" data-type="num">Signals</th>
+            <th data-col="actionRank"   data-type="num">Action</th>
+          </tr>
+        </thead>
+        <tbody><tr><td colspan="14" class="loading empty">loading…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="meta" id="top-meta">—</div>
+  </div>
+</div>
+
+<script>
+(function() {
+  'use strict';
+  const REFRESH_MS = 60 * 1000;
+  const PRICES_URL = '/bloomberg_prices.json';
+  const SCREENER_CSV_URL = '/long_screener_results.csv';
+  const FACTORS_URL = '/factor_signals_bbg.json';
+
+  // ─────────────────────────────────────────────────────────────
+  // CSV parser (RFC-4180-ish: respects double-quoted cells with
+  // embedded commas + escaped doublequotes "")
+  // ─────────────────────────────────────────────────────────────
+  function parseCsv(text) {
+    text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const rows = [];
+    let row = [], cell = '', inQ = false, i = 0;
+    while (i < text.length) {
+      const ch = text[i];
+      if (inQ) {
+        if (ch === '"') {
+          if (text[i+1] === '"') { cell += '"'; i += 2; continue; }
+          inQ = false; i++; continue;
+        }
+        cell += ch; i++; continue;
+      } else {
+        if (ch === '"') { inQ = true; i++; continue; }
+        if (ch === ',') { row.push(cell); cell = ''; i++; continue; }
+        if (ch === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; i++; continue; }
+        cell += ch; i++; continue;
+      }
+    }
+    if (cell.length || row.length) { row.push(cell); rows.push(row); }
+    if (!rows.length) return [];
+    const headers = rows[0];
+    return rows.slice(1).filter(r => r.length === headers.length).map(r => {
+      const o = {};
+      headers.forEach((h, idx) => o[h] = r[idx]);
+      return o;
+    });
+  }
+  function num(v) {
+    if (v == null) return null;
+    const n = parseFloat(v);
+    return isFinite(n) ? n : null;
+  }
+
+  // ── Formatters ────────────────────────────────────────────────
+  function fmt(v, d=2) { if (v == null || !isFinite(v)) return '—'; return Number(v).toFixed(d); }
+  function fmtPx(v)    { if (v == null || !isFinite(v)) return '—'; return '$' + Number(v).toFixed(2); }
+  function fmtPct(v, d=2) {
+    if (v == null || !isFinite(v)) return '—';
+    return (v >= 0 ? '+' : '') + (v*100).toFixed(d) + '%';
+  }
+  function fmtCap(v) {
+    if (v == null || !isFinite(v)) return '—';
+    if (v >= 1e12) return '$' + (v/1e12).toFixed(2) + 'T';
+    if (v >= 1e9)  return '$' + (v/1e9 ).toFixed(2) + 'B';
+    if (v >= 1e6)  return '$' + (v/1e6 ).toFixed(1) + 'M';
+    return '$' + v.toFixed(0);
+  }
+  function fmtVol(v) {
+    if (v == null || !isFinite(v)) return '—';
+    if (v >= 1e9) return (v/1e9).toFixed(2) + 'B';
+    if (v >= 1e6) return (v/1e6).toFixed(1) + 'M';
+    if (v >= 1e3) return (v/1e3).toFixed(0) + 'k';
+    return v.toFixed(0);
+  }
+  function moveClass(p) {
+    if (p == null || !isFinite(p)) return 'neutral';
+    if (p >=  0.05) return 'up-strong';
+    if (p >=  0)    return 'up';
+    if (p <= -0.05) return 'down-strong';
+    return 'down';
+  }
+  function ageStr(ts) {
+    if (!ts) return 'no data';
+    const m = Math.floor((Date.now() - new Date(ts).getTime()) / 60000);
+    if (m < 1) return 'fresh';
+    if (m < 60) return m + 'm ago';
+    return Math.floor(m/60) + 'h' + (m%60) + 'm ago';
+  }
+
+  // ── Bar utilities ─────────────────────────────────────────────
+  function barDay(b) { return b?.time?.split(' ')[0] || ''; }
+  function todayBars(bars) {
+    if (!bars || !bars.length) return [];
+    const last = barDay(bars[bars.length-1]);
+    return bars.filter(b => barDay(b) === last);
+  }
+  function priorDayBars(bars) {
+    if (!bars || !bars.length) return [];
+    const last = barDay(bars[bars.length-1]);
+    return bars.filter(b => barDay(b) !== last);
+  }
+  function barsByDay(bars) {
+    const days = {};
+    (bars || []).forEach(b => {
+      const d = barDay(b);
+      if (!d) return;
+      (days[d] = days[d] || []).push(b);
+    });
+    return days;
+  }
+
+  // ── Predictive signals (client-side, intraday-leaning) ────────
+  function volumeSurge(bars) {
+    if (!bars || bars.length < 6) return null;
+    const cur = bars[bars.length-1].volume;
+    const prior5 = bars.slice(-6, -1).map(b => b.volume);
+    const avg = prior5.reduce((a,b) => a+b, 0) / prior5.length;
+    if (!avg) return null;
+    return cur / avg;
+  }
+  function upDownVolRatio(bars, n=10) {
+    if (!bars || bars.length < n+1) return null;
+    let up = 0, dn = 0;
+    for (let i = bars.length - n; i < bars.length; i++) {
+      const b = bars[i];
+      const prevClose = bars[i-1]?.close ?? b.open;
+      if (b.close >= prevClose) up += b.volume; else dn += b.volume;
+    }
+    const tot = up + dn;
+    if (!tot) return null;
+    return up / tot;
+  }
+  function acceleration(bars) {
+    if (!bars || bars.length < 7) return null;
+    const c = bars.map(b => b.close);
+    const recent = (c[c.length-1] - c[c.length-4]) / c[c.length-4];
+    const prior  = (c[c.length-4] - c[c.length-7]) / c[c.length-7];
+    return recent - prior;
+  }
+  function vwapSlope(bars) {
+    const today = todayBars(bars);
+    if (today.length < 3) return null;
+    let cumPv = 0, cumV = 0;
+    const vw = today.map(b => {
+      const tp = (b.high + b.low + b.close) / 3;
+      cumPv += tp * b.volume;
+      cumV  += b.volume;
+      return cumV ? cumPv / cumV : null;
+    }).filter(v => v != null);
+    if (vw.length < 2) return null;
+    return (vw[vw.length-1] - vw[0]) / vw[0];
+  }
+  function rangeExpansion(bars) {
+    if (!bars || bars.length < 14) return null;
+    const today = todayBars(bars);
+    const yest  = priorDayBars(bars).slice(-7);
+    if (!today.length || !yest.length) return null;
+    const yHi = Math.max(...yest.map(b => b.high));
+    const yLo = Math.min(...yest.map(b => b.low));
+    const c   = today[today.length-1].close;
+    if (c > yHi) return (c - yHi) / yHi;
+    if (c < yLo) return (c - yLo) / yLo;
+    return 0;
+  }
+  function intradayRsi(bars, period=14) {
+    if (!bars || bars.length < period+1) return null;
+    const c = bars.map(b => b.close);
+    let g=0, l=0;
+    for (let i = c.length - period; i < c.length; i++) {
+      const d = c[i] - c[i-1];
+      if (d > 0) g += d; else l += -d;
+    }
+    if (l === 0) return 100;
+    const rs = (g/period) / (l/period);
+    return 100 - (100 / (1 + rs));
+  }
+  function todayVolume(bars) {
+    const t = todayBars(bars);
+    if (!t.length) return null;
+    return t.reduce((s,b) => s + (b.volume || 0), 0);
+  }
+  function avgDailyVolume(bars) {
+    // Use completed prior days only (exclude today since it's partial)
+    const byDay = barsByDay(bars);
+    const days = Object.keys(byDay).sort();
+    if (days.length < 2) return null;
+    const completed = days.slice(0, -1);  // drop the latest (partial)
+    if (!completed.length) return null;
+    const dailyVols = completed.map(d => byDay[d].reduce((s,b) => s + (b.volume || 0), 0));
+    return dailyVols.reduce((a,b) => a+b, 0) / dailyVols.length;
+  }
+
+  function predictiveComposite(bars) {
+    const surge = volumeSurge(bars);     // unsigned
+    const udv   = upDownVolRatio(bars, 10);   // 0..1, 0.5 neutral
+    const accel = acceleration(bars);     // signed
+    const vwap  = vwapSlope(bars);        // signed
+    const range = rangeExpansion(bars);   // signed
+
+    // Per-signal directional contributions (each in [-25, +25])
+    // Volume surge is unsigned magnitude, signed by accel direction (or UDV if no accel)
+    const directionHint = (accel != null && Math.abs(accel) > 0.001) ? Math.sign(accel)
+                        : (udv != null) ? Math.sign(udv - 0.5) : 0;
+    const surgeContrib = surge == null ? 0
+                       : Math.max(0, Math.min(25, (surge - 1) * 25)) * directionHint;
+    const udvContrib   = udv   == null ? 0
+                       : Math.max(-20, Math.min(20, (udv - 0.5) * 80));
+    const accelContrib = accel == null ? 0
+                       : Math.max(-20, Math.min(20, accel * 2000));
+    const vwapContrib  = vwap  == null ? 0
+                       : Math.max(-15, Math.min(15, vwap * 5000));
+    const rangeContrib = range == null ? 0
+                       : Math.max(-20, Math.min(20, Math.sign(range) * (range !== 0 ? 20 : 0)));
+
+    // Signed score: -100 (strong bear) to +100 (strong bull). Conflicting
+    // signals partially cancel here, which is the desired behavior — only
+    // names with aligned signals get extreme scores.
+    const signedRaw = surgeContrib + udvContrib + accelContrib + vwapContrib + rangeContrib;
+    const signedScore = Math.max(-100, Math.min(100, Math.round(signedRaw)));
+
+    // Magnitude (unsigned, for display + back-compat sorting)
+    const magnitude = Math.abs(signedScore);
+
+    // Per-signal direction codes for colored bars: -1 bear, 0 off, +1 bull
+    const dir = (val, threshold) =>
+      val == null ? 0 : (Math.abs(val) > threshold ? Math.sign(val) : 0);
+    const signalDirs = [
+      // Volume surge: only "fires" if volume is truly elevated AND we have a directional bias
+      (surge != null && surge > 1.4) ? directionHint : 0,
+      udv   == null ? 0 : (Math.abs(udv - 0.5) > 0.15 ? Math.sign(udv - 0.5) : 0),
+      dir(accel, 0.005),
+      dir(vwap,  0.002),
+      range == null ? 0 : Math.sign(range),
+    ];
+
+    return {
+      score: magnitude,        // unsigned 0-100
+      signedScore,             // signed -100 to 100
+      signalDirs,              // [-1|0|1] x 5
+      surge, udv, accel, vwap, range,
+    };
+  }
+
+  function actionLabel(signedScore, fundComposite, intradayMove) {
+    const move = intradayMove ?? 0;
+    const s = signedScore ?? 0;
+
+    // Confirmed bear: strong negative score + already moving down
+    if (s <= -65 && move <= -0.02) return { l: 'BREAKDOWN',     cls: 'badge-breakdown', rank: 0 };
+    // Pre-breakdown: strong negative score, price hasn't moved yet — early SHORT signal
+    if (s <= -65 && Math.abs(move) < 0.02) return { l: 'PRE-BREAKDOWN', cls: 'badge-prebreakdown', rank: 1 };
+    // Confirmed bull
+    if (s >=  65 && move >=  0.02) return { l: 'BREAKOUT',      cls: 'badge-breakout',  rank: 8 };
+    // Pre-breakout: strong positive, price hasn't moved yet — early LONG signal
+    if (s >=  65 && Math.abs(move) < 0.02) return { l: 'PRE-BREAKOUT', cls: 'badge-pre',     rank: 9 };
+    // Bullish + good fundamentals
+    if ((fundComposite ?? 0) >= 0.7 && s >= 25) return { l: 'STRONG', cls: 'badge-strong', rank: 7 };
+    // Bear-side weakening
+    if (s <= -25) return { l: 'WEAKENING', cls: 'badge-weakening', rank: 2 };
+    // Bull-side mild
+    if (s >=  25) return { l: 'WATCH',     cls: 'badge-watch',     rank: 6 };
+    // Middle of pack
+    return                { l: 'NEUTRAL',  cls: 'badge-noise',     rank: 4 };
+  }
+
+  // ── Macros ───────────────────────────────────────────────────
+  function macroPct(obj) {
+    const t = todayBars(obj.bars);
+    if (t.length < 2) return null;
+    const first = t[0].open;
+    const last  = t[t.length-1].close;
+    if (!first) return null;
+    return (last - first) / first;
+  }
+  function setMacro(prefix, px, pct, fmtFn=fmtPx) {
+    document.getElementById('m-' + prefix).textContent = px == null ? '—' : fmtFn(px);
+    const el = document.getElementById('m-' + prefix + '-pct');
+    if (pct == null) { el.textContent = ''; el.className = ''; return; }
+    el.textContent = ' ' + fmtPct(pct);
+    el.className = pct >= 0 ? 'up' : 'down';
+  }
+
+  // ── Sortable table state ─────────────────────────────────────
+  const sortState = {
+    movers: { col: 'move',  type: 'num', dir: -1 },  // default: largest abs move first → handled in render
+    top:    { col: 'composite', type: 'num', dir: -1 },
+  };
+  function makeSorter(state) {
+    return (a, b) => {
+      let av = a[state.col], bv = b[state.col];
+      if (state.type === 'num') {
+        av = (av == null || !isFinite(av)) ? -Infinity : av;
+        bv = (bv == null || !isFinite(bv)) ? -Infinity : bv;
+        return state.dir * (av - bv);
+      }
+      av = String(av || ''); bv = String(bv || '');
+      return state.dir * av.localeCompare(bv);
+    };
+  }
+  function attachSortHandlers(tableId, stateKey, rerender) {
+    const table = document.getElementById(tableId);
+    table.querySelectorAll('th[data-col]').forEach(th => {
+      th.addEventListener('click', () => {
+        const col = th.dataset.col;
+        const type = th.dataset.type || 'num';
+        const st = sortState[stateKey];
+        if (st.col === col) st.dir = -st.dir;
+        else { st.col = col; st.type = type; st.dir = (type === 'num' ? -1 : 1); }
+        rerender();
+        // Update header visuals
+        table.querySelectorAll('th').forEach(t => t.classList.remove('sorted', 'asc'));
+        th.classList.add('sorted');
+        if (st.dir === 1) th.classList.add('asc');
+      });
+    });
+  }
+
+  // ── Action-label filter ──────────────────────────────────────
+  let actionFilter = null;
+  function setActionFilter(label) {
+    actionFilter = (actionFilter === label) ? null : label;
+    document.querySelectorAll('.legend .badge[data-filter]').forEach(b => {
+      const isActive = (b.dataset.filter === actionFilter);
+      const isAny    = (actionFilter !== null);
+      b.classList.toggle('dim', isAny && !isActive);
+    });
+    const status = document.getElementById('filter-status');
+    if (actionFilter) {
+      status.innerHTML = ' <span class="filter-active">filtering: ' + actionFilter +
+        '</span><span class="filter-clear" id="filter-clear">[clear]</span>';
+      document.getElementById('filter-clear').addEventListener('click', () => setActionFilter(null));
+    } else {
+      status.innerHTML = '';
+    }
+    renderTopTable();
+  }
+
+  // ── Per-ticker detail panel (inline expand) ──────────────────
+  const expanded = new Set();
+  function toggleDetail(ticker) {
+    if (expanded.has(ticker)) expanded.delete(ticker);
+    else expanded.add(ticker);
+    renderTopTable();
+  }
+
+  // ── SVG mini chart for a ticker ──────────────────────────────
+  function buildSparkChart(bars, eod, livePx) {
+    if (!bars || bars.length < 5) {
+      return '<div class="empty" style="padding:0.5rem">not enough bars for chart</div>';
+    }
+    const W = 560, H = 170, PT = 10, PB = 20, PL = 44, PR = 8;
+    const visible = bars.slice(-50);
+    const n = visible.length;
+    const closes = visible.map(b => b.close);
+    const highs  = visible.map(b => b.high);
+    const lows   = visible.map(b => b.low);
+
+    // SMA-5 / SMA-20
+    const sma5  = closes.map((_, i) => i < 4  ? null : closes.slice(i-4,  i+1).reduce((a,b)=>a+b,0) / 5);
+    const sma20 = closes.map((_, i) => i < 19 ? null : closes.slice(i-19, i+1).reduce((a,b)=>a+b,0) / 20);
+
+    // Today's intraday VWAP
+    const lastDay = visible[n-1].time?.split(' ')[0];
+    const todayIdx = visible.map((b, i) => b.time?.split(' ')[0] === lastDay ? i : -1).filter(i => i >= 0);
+    let cumPv = 0, cumV = 0;
+    const vwap = visible.map((b, i) => {
+      if (todayIdx.includes(i)) {
+        const tp = (b.high + b.low + b.close) / 3;
+        cumPv += tp * b.volume;
+        cumV  += b.volume;
+        return cumV ? cumPv / cumV : null;
+      }
+      return null;
+    });
+
+    // 20-bar mean / std for sigma band (use last 20)
+    const win = closes.slice(-Math.min(20, n));
+    const mean = win.reduce((a,b)=>a+b,0) / win.length;
+    const sd   = Math.sqrt(win.reduce((a,b) => a + (b-mean)*(b-mean), 0) / win.length);
+    const sigUp = mean + sd, sigDn = mean - sd;
+
+    // Today H/L
+    const todayBars = todayIdx.map(i => visible[i]);
+    const todayHi = todayBars.length ? Math.max(...todayBars.map(b => b.high)) : null;
+    const todayLo = todayBars.length ? Math.min(...todayBars.map(b => b.low)) : null;
+
+    // Y-scale: include all relevant levels in the range
+    const candidates = [...lows, ...highs, eod, sigUp, sigDn, livePx, todayHi, todayLo].filter(v => v != null && isFinite(v));
+    const yMin = Math.min(...candidates) * 0.998;
+    const yMax = Math.max(...candidates) * 1.002;
+
+    const x = i => PL + (i / Math.max(1, n - 1)) * (W - PL - PR);
+    const y = px => PT + (1 - (px - yMin) / (yMax - yMin)) * (H - PT - PB);
+
+    function pathFor(arr) {
+      const pts = arr.map((v, i) => v == null ? null : `${i === 0 || arr[i-1] == null ? 'M' : 'L'}${x(i).toFixed(1)},${y(v).toFixed(1)}`);
+      return pts.filter(p => p).join(' ');
+    }
+
+    // Day dividers (vertical lines between days)
+    const dayDividers = [];
+    for (let i = 1; i < n; i++) {
+      const d0 = visible[i-1].time?.split(' ')[0];
+      const d1 = visible[i].time?.split(' ')[0];
+      if (d0 !== d1) dayDividers.push(x(i));
+    }
+
+    // Y-axis ticks (3 levels)
+    const tickPrices = [yMin, (yMin+yMax)/2, yMax];
+    const yTicks = tickPrices.map(p =>
+      `<text x="${PL - 4}" y="${y(p) + 3}" text-anchor="end">${p.toFixed(2)}</text>`
+    ).join('');
+
+    // Sigma band rect
+    const bandTopY  = y(sigUp);
+    const bandBotY  = y(sigDn);
+    const bandHeight = bandBotY - bandTopY;
+
+    const liveX = x(n - 1);
+    const liveY = y(livePx ?? closes[n-1]);
+
+    return `
+      <div class="chart-wrap">
+        <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+          <rect x="${PL}" y="${bandTopY}" width="${W - PL - PR}" height="${bandHeight}" class="sigma-band"/>
+          ${dayDividers.map(dx => `<line x1="${dx}" y1="${PT}" x2="${dx}" y2="${H - PB}" class="day-divider"/>`).join('')}
+
+          ${eod    != null ? `<line x1="${PL}" y1="${y(eod)}"    x2="${W - PR}" y2="${y(eod)}"    class="level-line level-eod"/>` : ''}
+          ${todayHi!= null ? `<line x1="${PL}" y1="${y(todayHi)}" x2="${W - PR}" y2="${y(todayHi)}" class="level-line level-hi"/>` : ''}
+          ${todayLo!= null ? `<line x1="${PL}" y1="${y(todayLo)}" x2="${W - PR}" y2="${y(todayLo)}" class="level-line level-lo"/>` : ''}
+
+          <path d="${pathFor(sma20)}" class="sma20"/>
+          <path d="${pathFor(sma5)}"  class="sma5"/>
+          <path d="${pathFor(vwap)}"  class="vwap"/>
+          <path d="${pathFor(closes)}" class="price-line"/>
+
+          ${livePx != null ? `<circle cx="${liveX}" cy="${liveY}" r="4" class="live-dot"/>` : ''}
+
+          <g class="axis">${yTicks}</g>
+        </svg>
+        <div class="chart-legend-row">
+          <span><span class="swatch" style="border-color:var(--gold)"></span>Price</span>
+          <span><span class="swatch" style="border-color:var(--blue);border-style:dashed"></span>SMA-5</span>
+          <span><span class="swatch" style="border-color:var(--purple);border-style:dashed"></span>SMA-20</span>
+          <span><span class="swatch" style="border-color:var(--green-bright)"></span>VWAP (today)</span>
+          <span><span class="swatch" style="border-color:var(--dim);border-style:dotted"></span>EOD close</span>
+          <span><span class="swatch" style="border-color:var(--green);border-style:dotted"></span>Today high</span>
+          <span><span class="swatch" style="border-color:var(--red);border-style:dotted"></span>Today low</span>
+          <span style="margin-left:auto;color:var(--dim)">±1σ band shaded · ${n} bars</span>
+        </div>
+      </div>`;
+  }
+
+  // ── Compact stats panel (sits beside the chart) ──────────────
+  function buildStatsPanel(row) {
+    const bars = row.bars || [];
+    if (!bars.length) return '<div class="empty" style="padding:1rem">no bars</div>';
+    const closes = bars.slice(-20).map(b => b.close);
+    const mean = closes.reduce((a,b)=>a+b,0) / closes.length;
+    const sd = Math.sqrt(closes.reduce((a,b)=>a+(b-mean)*(b-mean),0) / closes.length);
+    const livePx = row.livePx ?? closes[closes.length-1];
+    const z = sd > 0 ? (livePx - mean) / sd : 0;
+
+    // 5-bar momentum
+    const c = bars.map(b => b.close);
+    const mom5 = c.length >= 6 ? (c[c.length-1] - c[c.length-6]) / c[c.length-6] : null;
+
+    // Today's range vs yesterday's
+    const lastDay = bars[bars.length-1].time?.split(' ')[0];
+    const tBars = bars.filter(b => b.time?.split(' ')[0] === lastDay);
+    const yBars = bars.filter(b => b.time?.split(' ')[0] !== lastDay).slice(-7);
+    const tRng = tBars.length ? Math.max(...tBars.map(b=>b.high)) - Math.min(...tBars.map(b=>b.low)) : null;
+    const yRng = yBars.length ? Math.max(...yBars.map(b=>b.high)) - Math.min(...yBars.map(b=>b.low)) : null;
+    const rngExp = (tRng != null && yRng) ? tRng / yRng : null;
+
+    // Distance from VWAP
+    let cumPv = 0, cumV = 0;
+    tBars.forEach(b => { cumPv += ((b.high+b.low+b.close)/3) * b.volume; cumV += b.volume; });
+    const vwap = cumV ? cumPv / cumV : null;
+    const vwapDist = (vwap != null && livePx) ? (livePx - vwap) / vwap : null;
+
+    // Up/down bar ratio for today
+    const upBars = tBars.filter((b,i) => i > 0 && b.close > tBars[i-1].close).length;
+    const totalT = Math.max(0, tBars.length - 1);
+    const upRatio = totalT > 0 ? upBars / totalT : null;
+
+    // Bull/bear class for tinting
+    const bullCls = (v) => v == null ? '' : (v > 0 ? 'bull' : v < 0 ? 'bear' : '');
+
+    function stat(cls, lbl, val, sub) {
+      return `<div class="stat ${cls}"><div class="lbl">${lbl}</div>` +
+             `<div class="val">${val}</div>` +
+             (sub != null ? `<div class="sub">${sub}</div>` : '') + '</div>';
+    }
+    return `
+      <div class="stats-grid">
+        ${stat(bullCls(mom5),  '5-bar Mom',  fmtPct(mom5),     `${Math.round((mom5||0)*100*1000)/1000}bp`)}
+        ${stat(bullCls(z),     '20-bar z',   (z >= 0 ? '+' : '') + z.toFixed(2) + 'σ', `μ=${fmt(mean)}  σ=${fmt(sd)}`)}
+        ${stat(bullCls(vwapDist), 'vs VWAP', fmtPct(vwapDist), vwap != null ? '$' + fmt(vwap) : '—')}
+        ${stat('',             'Range exp',  rngExp == null ? '—' : rngExp.toFixed(2) + 'x', tRng != null && yRng != null ? `T:${fmt(tRng)} · Y:${fmt(yRng)}` : '')}
+        ${stat(bullCls((upRatio||0.5)-0.5), 'Up bars', upRatio == null ? '—' : (upRatio*100).toFixed(0) + '%', `${upBars}/${totalT} today`)}
+        ${stat('',             'V / ADV',    row.volRatio == null ? '—' : row.volRatio.toFixed(2) + 'x', '')}
+        ${stat(bullCls(row.signedScore), 'Pred score', (row.signedScore >= 0 ? '+' : '') + (row.signedScore ?? 0), `${(row.signalDirs||[]).filter(d => d!==0).length}/5 signals`)}
+        ${stat('',             'Action',     `<span class="badge ${row.action?.cls||''}" style="font-size:9px;padding:1px 4px;">${row.action?.l||'—'}</span>`, '')}
+      </div>
+      <div class="pred-history">
+        Prediction history for ${row.ticker}: capturing every 5 min · check back in a few days for assertiveness stats
+      </div>
+    `;
+  }
+
+  // ── Trading levels (entry/exit/stop/target) ──────────────────
+  function buildLevelsStrip(row) {
+    const bars = row.bars || [];
+    if (!bars.length) return '';
+    const closes = bars.slice(-20).map(b => b.close);
+    const mean = closes.reduce((a,b)=>a+b,0) / closes.length;
+    const sd = Math.sqrt(closes.reduce((a,b)=>a+(b-mean)*(b-mean),0) / closes.length);
+    const livePx = row.livePx ?? closes[closes.length-1];
+    const lastDay = bars[bars.length-1].time?.split(' ')[0];
+    const tBars = bars.filter(b => b.time?.split(' ')[0] === lastDay);
+    const todayHi = tBars.length ? Math.max(...tBars.map(b => b.high)) : null;
+    const todayLo = tBars.length ? Math.min(...tBars.map(b => b.low)) : null;
+    let cumPv = 0, cumV = 0;
+    tBars.forEach(b => { cumPv += ((b.high+b.low+b.close)/3) * b.volume; cumV += b.volume; });
+    const vwap = cumV ? cumPv / cumV : null;
+
+    const ss = row.signedScore ?? 0;
+    const isBull = ss >= 25, isBear = ss <= -25;
+    let entry, target, stop, dirLabel;
+    if (isBull) {
+      entry    = vwap != null ? vwap : mean;
+      target   = (todayHi ?? livePx) + sd * 0.5;
+      stop     = (todayLo ?? (mean - sd));
+      dirLabel = 'LONG';
+    } else if (isBear) {
+      entry    = vwap != null ? vwap : mean;
+      target   = (todayLo ?? livePx) - sd * 0.5;
+      stop     = (todayHi ?? (mean + sd));
+      dirLabel = 'SHORT';
+    } else {
+      entry  = mean; target = mean + sd; stop = mean - sd;
+      dirLabel = 'RANGE';
+    }
+    function card(cls, lbl, v, isStr=false) {
+      const val = isStr ? v : fmtPx(v);
+      return `<div class="lvl-card ${cls}"><div class="lbl">${lbl}</div><div class="val">${val}</div></div>`;
+    }
+    return `
+      <div class="levels-strip">
+        ${card('', 'Setup', dirLabel, true)}
+        ${card('', 'Live',  livePx)}
+        ${card('entry',  'Entry',  entry)}
+        ${card('target', 'Target', target)}
+        ${card('stop',   'Stop',   stop)}
+        ${card('', 'Today H', todayHi)}
+        ${card('', 'Today L', todayLo)}
+        ${card('', 'VWAP',    vwap)}
+        ${card('', '20-bar μ', mean)}
+        ${card('', '20-bar σ', sd)}
+      </div>
+    `;
+  }
+  function renderDetail(row) {
+    const f = row.fund || {};
+    let detail = null;
+    try { detail = f.pt_detail_json ? JSON.parse(f.pt_detail_json) : null; } catch (_) {}
+    const targetPx = row.fund?.target_price;
+    const upside   = row.fund?.upside_pct;
+    const ptSrc    = row.fund?.pt_source || '—';
+    const sector   = row.fund?.sector || '—';
+    const indu     = row.fund?.industry || '—';
+    const gates    = (detail?.gates_fired || []);
+    const models   = detail?.models || {};
+    const dom      = detail?.dominant_model;
+    const quality  = detail?.quality_score;
+
+    const cards = [
+      ['Sector / Industry', `${sector} · ${indu}`],
+      ['Target Price',      `${fmtPx(targetPx)}  <span class="${(upside||0) >= 0 ? 'up' : 'down'}">(${fmtPct(upside)})</span>  <span class="neutral">[${ptSrc}]</span>`],
+      ['Quality Score',     fmt(quality, 2)],
+      ['Dominant Model',    dom || '—'],
+      ['Pred · Surge',      row.surge == null ? '—' : row.surge.toFixed(2) + 'x'],
+      ['Pred · UDV',        row.udv   == null ? '—' : (row.udv*100).toFixed(0)+'%'],
+      ['Pred · Accel',      row.accel == null ? '—' : (row.accel*100).toFixed(2)+'%'],
+      ['Pred · VWAP slope', row.vwap  == null ? '—' : (row.vwap*100).toFixed(2)+'%'],
+      ['Pred · Range exp',  row.range == null ? '—' : (row.range*100).toFixed(2)+'%'],
+    ].map(([l,v]) => `<div class="detail-card"><div class="lbl">${l}</div><div class="val">${v}</div></div>`).join('');
+
+    const modelRows = Object.entries(models).map(([name, m]) => `
+      <tr>
+        <td style="text-align:left">${name}${name === dom ? ' <span style="color:var(--gold)">★</span>' : ''}</td>
+        <td>${fmtPx(m.pt)}</td>
+        <td>${fmt(m.r2, 3)}</td>
+        <td>${fmt(m.conviction, 3)}</td>
+        <td>${fmt(m.weight, 3)}</td>
+        <td style="text-align:left">${m.applied_cap ? '<span class="gate-tag cap">'+m.applied_cap+'</span>' : ''}</td>
+      </tr>
+    `).join('');
+
+    const gateTags = gates.map(g => {
+      const cls = g.includes('CAP') ? 'cap' : g.includes('CLIP') ? 'clip' : g.includes('DROP') ? 'drop' : '';
+      return `<span class="gate-tag ${cls}">${g}</span>`;
+    }).join(' ');
+
+    const chart = buildSparkChart(row.bars || [], row.eod, row.livePx);
+    const stats = buildStatsPanel(row);
+    const levels = buildLevelsStrip(row);
+    return `<tr class="detail-row"><td colspan="14">
+      <div class="detail-top">
+        <div>${chart}</div>
+        <div>${stats}</div>
+      </div>
+      ${levels}
+      <div class="detail-grid">${cards}</div>
+      ${modelRows ? `
+      <div class="detail-models">
+        <table><thead>
+          <tr><th style="text-align:left">Model</th><th>PT</th><th>R²</th><th>Conviction</th><th>Weight</th><th style="text-align:left">Cap</th></tr>
+        </thead><tbody>${modelRows}</tbody></table>
+      </div>` : ''}
+      ${gates.length ? `<div style="padding:0.3rem 0">Gates: ${gateTags}</div>` : ''}
+    </td></tr>`;
+  }
+
+  // ── Render ────────────────────────────────────────────────────
+  let lastRows = [];
+  function renderMoversTable() {
+    const tbody = document.querySelector('#movers-tbl tbody');
+    let rows = lastRows.filter(r => r.move != null);
+    const st = sortState.movers;
+    if (st.col === 'move' && st.dir === -1) {
+      // Default: sort by ABS move desc
+      rows = rows.sort((a,b) => Math.abs(b.move ?? 0) - Math.abs(a.move ?? 0));
+    } else {
+      rows = rows.sort(makeSorter(st));
+    }
+    tbody.innerHTML = rows.length === 0
+      ? '<tr><td colspan="6" class="empty">no overlap with watchlist yet</td></tr>'
+      : rows.map(m => `
+        <tr>
+          <td class="tkr">${m.ticker}</td>
+          <td>${fmtPx(m.livePx)}</td>
+          <td class="neutral">${fmtPx(m.eod)}</td>
+          <td class="${moveClass(m.move)}">${fmtPct(m.move)}</td>
+          <td>${m.rsi == null ? '—' : m.rsi.toFixed(0)}</td>
+          <td>${fmtVol(m.volNow)}</td>
+        </tr>
+      `).join('');
+    document.getElementById('movers-meta').textContent =
+      `${rows.length} of ${lastRows.length} watchlist tickers`;
+  }
+  function renderTopTable() {
+    const tbody = document.querySelector('#top-tbl tbody');
+    let rows = lastRows.filter(r => r.composite != null);
+    if (actionFilter) {
+      rows = rows.filter(r => r.action?.l === actionFilter);
+    }
+    rows = rows.sort(makeSorter(sortState.top));
+    if (rows.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="14" class="empty">no fundamental + BBG overlap yet</td></tr>';
+      document.getElementById('top-meta').textContent = '—';
+      return;
+    }
+    const html = [];
+    rows.forEach((m, i) => {
+      const dirs = m.signalDirs || [];
+      const ss = m.signedScore ?? 0;
+      const strong = Math.abs(ss) >= 65;
+      const sigBars = dirs.map(d => {
+        const cls = d > 0 ? 'bull' : d < 0 ? 'bear' : '';
+        const strongCls = (cls && strong) ? ' strong' : '';
+        return '<span class="signal-bar ' + cls + strongCls + '"></span>';
+      }).join('');
+      let predCls = 'pred-score';
+      if      (ss >=  65) predCls += ' bull-strong';
+      else if (ss >=  25) predCls += ' bull';
+      else if (ss <= -65) predCls += ' bear-strong';
+      else if (ss <= -25) predCls += ' bear';
+      const predDisp = (ss >= 0 ? '+' : '') + ss;
+      const upsideCls = moveClass(m.upsidePct);
+      html.push(`
+        <tr>
+          <td class="neutral">${m.rank ?? i+1}</td>
+          <td class="tkr" data-ticker="${m.ticker}">${m.ticker}</td>
+          <td>${fmt(m.composite, 2)}</td>
+          <td class="neutral">${fmtCap(m.mktcap)}</td>
+          <td class="neutral">${fmtPx(m.eod)}</td>
+          <td>${fmtPx(m.livePx)}</td>
+          <td class="${moveClass(m.move)}">${fmtPct(m.move)}</td>
+          <td class="neutral">${fmtPx(m.targetPx)}</td>
+          <td class="${upsideCls}">${fmtPct(m.upsidePct)}</td>
+          <td>${m.rsi == null ? '—' : m.rsi.toFixed(0)}</td>
+          <td>${m.volRatio == null ? '—' : m.volRatio.toFixed(2)+'x'}</td>
+          <td class="${predCls}">${predDisp}</td>
+          <td><span class="signal-bars">${sigBars}</span></td>
+          <td>${m.action ? '<span class="badge '+m.action.cls+'">'+m.action.l+'</span>' : '—'}</td>
+        </tr>
+      `);
+      if (expanded.has(m.ticker)) html.push(renderDetail(m));
+    });
+    tbody.innerHTML = html.join('');
+    // Re-attach click handlers on the ticker cells
+    tbody.querySelectorAll('td.tkr[data-ticker]').forEach(td => {
+      td.addEventListener('click', () => toggleDetail(td.dataset.ticker));
+    });
+    const counts = rows.reduce((acc, r) => {
+      const k = r.action?.l || 'NOISE';
+      acc[k] = (acc[k] || 0) + 1; return acc;
+    }, {});
+    const summary = Object.entries(counts)
+      .sort((a,b) => b[1] - a[1])
+      .map(([k,v]) => k+':'+v).join(' · ');
+    document.getElementById('top-meta').textContent =
+      `${rows.length} names · ${summary || '—'}`;
+  }
+
+  // ── Fetchers ──────────────────────────────────────────────────
+  let lastFundamentals = {};
+  async function fetchFundamentals() {
+    try {
+      const r = await fetch(SCREENER_CSV_URL + '?_=' + Date.now(), { cache: 'no-cache' });
+      if (!r.ok) throw new Error('csv ' + r.status);
+      const rows = parseCsv(await r.text());
+      const map = {};
+      rows.forEach((rw, idx) => {
+        if (!rw.ticker) return;
+        map[rw.ticker] = {
+          composite_score: num(rw.composite_score),
+          last_price:      num(rw.last_price),
+          target_price:    num(rw.target_price),
+          upside_pct:      num(rw.upside_pct),
+          pt_source:       rw.pt_source || '',
+          pt_detail_json:  rw.pt_detail_json || '',
+          marketcap:       num(rw.marketcap),
+          sector:          rw.sector || '',
+          industry:        rw.industry || '',
+          rank:            idx + 1,
+        };
+      });
+      lastFundamentals = map;
+      return map;
+    } catch (e) {
+      console.error('fundamentals fetch failed', e);
+      return lastFundamentals;
+    }
+  }
+  async function fetchMarketBias() {
+    try {
+      const r = await fetch(FACTORS_URL + '?_=' + Date.now(), { cache: 'no-cache' });
+      if (!r.ok) return null;
+      const j = await r.json();
+      const res = j?.result || {};
+      return {
+        rawLabel:    res.label || null,
+        sentLabel:   res.sent_label || null,
+        composite:   res.composite,
+        sentComp:    res.sent_composite,
+        mrSignal:    res.mr_signal,
+        mrWeight:    res.mr_weight,
+        sentWeight:  res.sent_weight,
+        confidence:  res.confidence,
+      };
+    } catch (e) { return null; }
+  }
+
+  // ── Main refresh tick ─────────────────────────────────────────
+  async function refresh() {
+    try {
+      const [bbgR, fundamentals, bias] = await Promise.all([
+        fetch(PRICES_URL + '?_=' + Date.now(), { cache: 'no-cache' }),
+        fetchFundamentals(),
+        fetchMarketBias(),
+      ]);
+      if (!bbgR.ok) throw new Error('bbg ' + bbgR.status);
+      const bbg = await bbgR.json();
+
+      const spy = bbg.tickers?.SPY || {};
+      const vix = bbg.tickers?.VIX || {};
+      const tlt = bbg.tickers?.TLT || {};
+      setMacro('spy', spy.price, macroPct(spy));
+      setMacro('vix', vix.vix,   macroPct(vix), v => fmt(v,2));
+      setMacro('tlt', tlt.tlt,   macroPct(tlt));
+      // Bias chip: show effective label (gated by confidence) + components
+      const biasEl   = document.getElementById('m-bias');
+      const biasDet  = document.getElementById('m-bias-detail');
+      const biasChip = document.getElementById('m-bias-chip');
+      if (!bias) {
+        biasEl.textContent = 'unknown';
+        biasEl.className = 'neutral';
+        biasDet.textContent = '';
+        biasChip.title = '';
+      } else {
+        const conf = bias.confidence ?? 0;
+        // Suppress directional label when confidence is low (signals conflict)
+        const effective = (conf < 60) ? 'NEUTRAL' : bias.rawLabel;
+        biasEl.textContent = effective || 'NEUTRAL';
+        biasEl.className = effective === 'BUY' ? 'up'
+                         : effective === 'SELL' ? 'down' : 'neutral';
+
+        // Compact inline detail: show conflict if present
+        const sentArrow = (bias.sentComp ?? 0) >= 0 ? '↑' : '↓';
+        const mrArrow   = (bias.mrSignal ?? 0) >= 0 ? '↑' : '↓';
+        const sentCls   = (bias.sentComp ?? 0) >= 0 ? 'up' : 'down';
+        const mrCls     = (bias.mrSignal ?? 0) >= 0 ? 'up' : 'down';
+        biasDet.innerHTML =
+          ' · <span class="' + sentCls + '">Sent ' + sentArrow + ' ' + (bias.sentLabel || '—') + '</span>' +
+          ' · <span class="' + mrCls   + '">MR '   + mrArrow   + ' ' + ((bias.mrSignal ?? 0).toFixed(2)) + '</span>' +
+          ' · conf ' + Math.round(conf) + '%';
+        // Hover tooltip with full details
+        biasChip.title =
+          'Raw: ' + (bias.rawLabel || '—') + '\n' +
+          'Sentiment composite: ' + ((bias.sentComp ?? 0).toFixed(3)) + ' (' + (bias.sentLabel || '—') + ')\n' +
+          'MR signal: ' + ((bias.mrSignal ?? 0).toFixed(3)) + '\n' +
+          'Weights: MR ' + Math.round((bias.mrWeight ?? 0)*100) + '% · Sent ' + Math.round((bias.sentWeight ?? 0)*100) + '%\n' +
+          'Composite: ' + ((bias.composite ?? 0).toFixed(3)) + '\n' +
+          'Confidence: ' + Math.round(conf) + '% (label suppressed to NEUTRAL if < 60%)';
+      }
+      document.getElementById('age').textContent = 'BBG ' + ageStr(bbg.generated_at);
+
+      const watchlist = bbg.watchlist || {};
+      const enriched = [];
+      Object.entries(watchlist).forEach(([t, w]) => {
+        if (!w || w.error) return;
+        const fund   = fundamentals[t] || null;
+        const livePx = w.price;
+        const eod    = fund?.last_price ?? null;
+        const move   = (livePx != null && eod) ? (livePx - eod) / eod : null;
+        const pred   = predictiveComposite(w.bars || []);
+        const rsi    = intradayRsi(w.bars || []);
+        const volNow = todayVolume(w.bars || []);
+        const adv    = avgDailyVolume(w.bars || []);
+        const volRatio = (volNow != null && adv) ? volNow / adv : null;
+        const action  = actionLabel(pred.signedScore, fund?.composite_score, move);
+        const sigCount = (pred.signalDirs || []).filter(d => d !== 0).length;
+        enriched.push({
+          ticker: t, livePx, eod, move, rsi, volNow, adv, volRatio,
+          predScore:    pred.score,        // unsigned magnitude (kept for back-compat)
+          signedScore:  pred.signedScore,  // signed -100..+100
+          signalDirs:   pred.signalDirs,   // [-1|0|+1] x 5
+          signalsScore: sigCount,
+          surge: pred.surge, udv: pred.udv, accel: pred.accel, vwap: pred.vwap, range: pred.range,
+          composite: fund?.composite_score ?? null,
+          mktcap:    fund?.marketcap ?? null,
+          rank:      fund?.rank ?? null,
+          targetPx:  fund?.target_price ?? null,
+          upsidePct: fund?.upside_pct ?? null,
+          fund,
+          bars: w.bars || [],          // for chart + levels
+          action, actionRank: action.rank,
+        });
+      });
+      lastRows = enriched;
+      renderMoversTable();
+      renderTopTable();
+    } catch (e) {
+      console.error(e);
+      document.getElementById('age').textContent = 'fetch failed: ' + e.message;
+    }
+  }
+
+  // ── Force pull button ─────────────────────────────────────────
+  const btn = document.getElementById('refresh-btn');
+  btn.addEventListener('click', () => {
+    btn.disabled = true; btn.textContent = 'pulling…';
+    fetch('http://rcg-nixos:8085/refresh').finally(() => {
+      setTimeout(async () => {
+        await refresh();
+        btn.disabled = false; btn.textContent = 'Force pull';
+      }, 18000);
+    });
+  });
+
+  attachSortHandlers('movers-tbl', 'movers', renderMoversTable);
+  attachSortHandlers('top-tbl',    'top',    renderTopTable);
+
+  // Click on a legend badge to filter the Top 40 table to that action
+  document.querySelectorAll('.legend .badge[data-filter]').forEach(b => {
+    b.addEventListener('click', () => setActionFilter(b.dataset.filter));
+  });
+
+  refresh();
+  setInterval(refresh, REFRESH_MS);
+})();
+</script>
+</body>
+</html>

@@ -231,9 +231,14 @@ def compute_mean_reversion(bbg: dict) -> dict:
                 "current_price": spy_data.get("price"),
                 "levels": {}, "note": "insufficient bars"}
     result = _compute_mr_for_ticker("SPY", bars, MR_LOOKBACK)
-    result["note"] = (f"z={result['z_score']:+.2f}σ  "
-                      f"MR weight={result['mr_weight']*100:.0f}%  "
-                      f"Sent weight={result['sent_weight']*100:.0f}%")
+    trend = result.get("trend_strength", 0.0)
+    raw   = result.get("mr_weight_raw", result["mr_weight"])
+    note  = (f"z={result['z_score']:+.2f}σ  "
+             f"MR weight={result['mr_weight']*100:.0f}%  "
+             f"Sent weight={result['sent_weight']*100:.0f}%")
+    if trend > 0.05 and raw > 0:
+        note += f"  trend={trend:.2f} (MR raw was {raw*100:.0f}%, reduced)"
+    result["note"] = note
     return result
 
 
@@ -858,6 +863,32 @@ setInterval(updateAge, 30000);
 WATCHLIST_PATH = Path("/home/nixos/Prod/V1/src/watchlist.json")
 WL_LOOKBACK    = 10   # default, overridden per ticker via watchlist.json
 
+# Trend-aware MR weighting: when the price series is strongly trending,
+# mean reversion is the wrong bet. We reduce mr_weight by up to TREND_MR_REDUCTION
+# of itself when trend_strength == 1.0 (full directional move).
+TREND_MR_REDUCTION = 0.6
+
+
+def _trend_strength(closes) -> float:
+    """
+    Return 0..1 — how directional the recent price action is.
+    1.0 = strong, persistent move (MR likely wrong); 0.0 = chop (MR appropriate).
+
+    Composition:
+      persistence: |fraction-of-up-bars - 0.5| × 2  → 0 (balanced) to 1 (one-sided)
+      magnitude:   |5-bar return| / 1.5%             clipped to 1
+    Combined as persistence × magnitude.
+    """
+    if not closes or len(closes) < 7:
+        return 0.0
+    n = min(10, len(closes) - 1)
+    up = sum(1 for i in range(-n, 0) if closes[i] > closes[i-1])
+    persistence = abs((up / n) - 0.5) * 2.0  # 0..1
+    ret5 = (closes[-1] - closes[-6]) / closes[-6] if closes[-6] else 0.0
+    magnitude = min(1.0, abs(ret5) / 0.015)
+    return round(persistence * magnitude, 3)
+
+
 def _compute_mr_for_ticker(ticker: str, bars: list, lookback: int,
                             note: str = "") -> dict:
     """
@@ -895,7 +926,12 @@ def _compute_mr_for_ticker(ticker: str, bars: list, lookback: int,
         signal_strength = 1.0
 
     mr_signal   = round(direction * signal_strength, 4)
-    mr_weight   = round(min(0.70, 0.70 * max(0, abs_z - MR_1SIGMA)), 4) if abs_z > MR_1SIGMA else 0.0
+    mr_weight_raw = round(min(0.70, 0.70 * max(0, abs_z - MR_1SIGMA)), 4) if abs_z > MR_1SIGMA else 0.0
+
+    # Trend-aware MR weight: reduce when the move is strongly directional.
+    # On clearly-trending days, mean reversion is the wrong side of the trade.
+    trend       = _trend_strength(closes)
+    mr_weight   = round(mr_weight_raw * (1.0 - TREND_MR_REDUCTION * trend), 4)
     sent_weight = round(1.0 - mr_weight, 4)
 
     dp        = 3 if price < 10 else 2
@@ -940,6 +976,7 @@ def _compute_mr_for_ticker(ticker: str, bars: list, lookback: int,
         "active": active, "z_score": round(z_score, 3), "abs_z": round(abs_z, 3),
         "label": label, "signal": mr_signal,
         "mr_weight": mr_weight, "sent_weight": sent_weight,
+        "mr_weight_raw": mr_weight_raw, "trend_strength": trend,
         "mean": round(mean, dp), "std": round(std, dp+1),
         "current_price": round(price, dp),
         "levels": {"1sigma_up": level_1up, "1sigma_dn": level_1dn,

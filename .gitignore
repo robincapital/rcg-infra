@@ -6,7 +6,7 @@
 # generated outputs
 outputs/
 *.pdf
-*.html
+outputs/*.html
 
 # notebooks (per scope decision: prod code only)
 *.ipynb

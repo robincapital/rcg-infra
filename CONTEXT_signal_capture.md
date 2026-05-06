@@ -1,6 +1,6 @@
 # RCG Signal Capture — CONTEXT
-**Last updated:** 2026-05-05
-**Status:** Phase 2A Sessions 1–4 complete; Session 5 (shadow observation) ongoing implicitly
+**Last updated:** 2026-05-06
+**Status:** Phase 2A Sessions 1–4 complete; Session 5 (shadow observation) ongoing; Live Trading dashboard + predictions capture live
 
 ---
 
@@ -323,6 +323,42 @@ natively.
 - **End-to-end smoke test passed**: refresh button → server → SSH-to-Windows →
   bloomberg_prices.py runs (16s) → SCP back + GCS upload → sentiment_bbg.py runs →
   fresh `factor_signals_bbg.json` + HTML in 20s total.
+
+**7. Live Trading dashboard + predictions capture (May 6)**
+- New page **`src/trade.html`** served at `http://rcg-nixos:8080/trade.html` (port-8080
+  static server). Two-column layout: left = top movers (sortable, scrollable),
+  right = top-40 with fundamental composite + intraday metrics + signed predictive
+  score + 5-bar signal indicators + action label. Click any ticker for inline
+  expansion containing an inferno-styled SVG chart (price + SMA-5 + SMA-20 + VWAP +
+  EOD/today H/L/±1σ band) plus a stats panel (5-bar momentum, 20-bar z, vs-VWAP,
+  range expansion, up-bar ratio, V/ADV, signed pred score, action). Action labels
+  are direction-aware: PRE-BREAKOUT / BREAKOUT / STRONG / WATCH / NEUTRAL /
+  WEAKENING / PRE-BREAKDOWN / BREAKDOWN. Click a badge in the legend to filter the
+  table to that label.
+- **Bias signal fixed.** `market_sentiment_bbg.py` now down-weights MR weight by up
+  to 60% on trending days via a new `_trend_strength(closes)` helper (persistence ×
+  magnitude). On today's data, MR raw 40% → effective 37%, composite −0.31 → −0.08,
+  label SELL → NEUTRAL. Dashboard chip also gates label to NEUTRAL when confidence <
+  60% and shows components inline (`Sent ↑ BUY · MR ↓ −0.57 · conf 40%`).
+- **Predictions capture pipeline.** New `src/predictions_capture.py` script + new
+  `systemd.services.rcg-predictions-capture` + `systemd.timers.rcg-predictions-capture`
+  in `claude-finance.nix`. Fires `Mon..Fri *-*-* 09..17:05,35:00 America/New_York`
+  (every 30 min M-F market hours, 5 min after BBG Task Scheduler so prices land
+  fresh). Each snapshot writes one `runs` row (`run_type='live_prediction'`) and
+  ~16 signals per ticker into the `signals` table:
+    pred_signed_score · pred_magnitude · pred_action (string) ·
+    pred_surge · pred_udv · pred_accel · pred_vwap_slope · pred_range_exp ·
+    live_price · eod_close · intraday_move · intraday_rsi · vol_now · adv ·
+    vol_adv_ratio · fundamental_composite
+  At 42 tickers × 16 signals × 18 fires/day, that's ~12K signals/day = ~365K/month.
+  First captured run after deploy: run_id=10, 42 tickers, 659 signals.
+- **Cross-functionality wiring** (May 5–6):
+    - Sharadar local cron now writes parquet to GCS too (date-partitioned mirror)
+    - `dynamic_factor_screener_v3.py` writes `watchlist.json` of top-40 + macros and
+      SCPs to Windows so BBG Task Scheduler picks up the right universe
+    - `bloomberg_prices.json` symlinked into `outputs/` so `trade.html` can
+      `fetch('/bloomberg_prices.json')` from the static port-8080 server
+    - `factor_signals_bbg.json` symlinked similarly for the bias chip
 
 ### Pending Session 4 polish (low priority)
 - **ADC reauth** — `gcloud auth application-default login` on NixOS was attempted
