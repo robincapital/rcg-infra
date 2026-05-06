@@ -1,6 +1,6 @@
 # RCG Price Targets — CONTEXT
-**Last updated:** 2026-04-28
-**Status:** Day 4 deployment in progress
+**Last updated:** 2026-05-06
+**Status:** Day 5 complete — engine consolidation done. Phase 1 closed.
 
 ---
 
@@ -166,11 +166,50 @@ Legacy engine returns. No file edits.
 
 ---
 
+## Day 5 — Engine consolidation + N/A elimination (2026-05-06)
+
+### What changed
+**1. `rcg_report.py` lines 930–969 replaced.**
+Both Path 1 (read PT from screener CSV) and Path 2 (independent
+`compute_v3_target_price`) deleted. The patched block always calls
+`price_targets.compute_target_price` regardless of whether the ticker is in
+the screener CSV. Single source of truth — same gates apply everywhere.
+- `analyst_target` and `n_analysts` now passed to the engine so the envelope
+  fires on every ticker including in-screener names (was only firing on
+  Path 2 names previously).
+- Old `ANALYST_DIVERGENCE_THRESHOLD` post-pass deleted — engine handles
+  divergence labeling internally.
+
+**2. Screener candidate pool: `min(screened.height, MAX_RESULTS * 2)` →
+`min(screened.height, max(MAX_RESULTS * 2, 100))`.**
+Bumped from 80 to 100 so names that rank into the final top-40 only after
+Finnhub data shifts scores (rank 81–100 pre-fetch) still get analyst data.
+Eliminates the residual `pt_source = N/A` from Day 4.
+
+### Verification
+- Syntax check (`ast.parse`): both modules pass
+- Import check on Jupyter kernel python: clean
+- TEM smoke test (`generate_report("TEM")`):
+  - Engine produces $38.84 with `M⚠clip` source (clipped to `analyst × 0.5`
+    because divergence > 75%)
+  - PDF generated, conviction breakdown intact, "Data path: Independent
+    compute (any ticker)" — confirms new code path
+  - Patch draft predicted `M*` not `M⚠clip`; engine pulled the lower clip
+    bound because TEM's pre-clip model PT was meaningfully below
+    `analyst × 0.5`. Engine behavior is correct; draft prediction was
+    optimistic. No regression.
+- Screener pool change is logic-only — next 05:00 ET screener cron
+  (Mon–Fri) will be the live integrated test.
+
+---
+
 ## Open items
-- [ ] Day 5: patch `rcg_report.py` to always use shared engine (kill Path 1
-      CSV-read fork)
-- [ ] Wire `BLOOMBERG_INTRADAY_MAX` into `bloomberg_prices.py` (Phase 5)
+- [ ] Wire `BLOOMBERG_INTRADAY_MAX` into `bloomberg_prices.py` (Phase 5;
+      separate from Phase 1)
 - [ ] After 2 weeks live: review HALT/clip/clean distribution vs desk P&L
       for floor calibration
 - [ ] Drop legacy `compute_target_price_and_upside` after 1 month of stable
       operation
+- [ ] Drop legacy `compute_v3_target_price` from `rcg_report.py` (still
+      defined at line 530+ but no longer called) — safe to remove after
+      Day 5 has been live for 2 weeks

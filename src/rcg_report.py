@@ -928,45 +928,50 @@ def run_analysis(ticker):
     vol_60   = float(np.std(np.diff(np.log(closes[-60:])))*np.sqrt(252)*100) if len(closes)>30 else None
 
     # ── PRICE TARGET ──────────────────────────────────────────
+    # Day 5: Always run shared price_targets engine. Replaces the old
+    # CSV-read fork (Path 1) that inherited the screener's broken PT engine
+    # and bypassed the report's R²-floor / envelope / FCF-cap gates.
+    import price_targets as _pt_engine
+
     internal_target    = None
     pt_model_breakdown = {}
     pt_source          = "none"
     divergence_flagged = False
 
-    if csv_row:
-        # Path 1: screener CSV (fast, consistent)
-        internal_target    = cv(csv_row.get("target_price"))
-        pt_source          = str(csv_row.get("pt_source") or "M")
-        divergence_flagged = bool(csv_row.get("analyst_divergence_flag") or False)
-        print(f"  Internal PT from screener CSV: ${internal_target}")
-    else:
-        # Path 2: independent compute — works for ALL tickers including those
-        # excluded from screener (biotech, micro-cap, ADR, high-debt, etc.)
-        print("  Computing v3 PT independently (no screener data)...")
-        if latest_mktcap and latest_shares and last_price:
-            internal_target, pt_model_breakdown = compute_v3_target_price(
-                ebitda_series  = ebitda,
-                revenue_series = revenue,
-                fcf_series     = fcf_series,
-                marketcap      = latest_mktcap,
-                debt           = latest_debt or 0,
-                cash           = latest_cash or 0,
-                shares         = latest_shares,
-                sector         = info["sector"],
-            )
-            if internal_target:
-                pt_source = "M"
-                print(f"  Internal PT: ${internal_target:.2f}  (models: {list(pt_model_breakdown.keys())})")
-            else:
-                print("  PT engine returned None — insufficient fundamental data")
+    print("  Computing PT via shared price_targets engine...")
+
+    if latest_mktcap and latest_shares and last_price:
+        _res = _pt_engine.compute_target_price(
+            ebitda_series    = ebitda,
+            revenue_series   = revenue,
+            fcf_series       = fcf_series,
+            debt_series      = debt_series,
+            marketcap        = float(latest_mktcap),
+            last_price       = float(last_price),
+            cash_on_hand     = float(latest_cash or 0),
+            shares_diluted   = float(latest_shares) if latest_shares else None,
+            sector           = info["sector"],
+            fed_target_rate  = 0.03625,
+            fed_neutral_rate = 0.0300,
+            analyst_target   = cv(analyst.get("target_mean")),
+            n_analysts       = int(analyst.get("total_analysts") or 0),
+            apply_envelope   = True,
+        )
+        internal_target    = _res.target_price
+        pt_model_breakdown = _res.breakdown.get("models", {})
+        pt_source          = _res.pt_source
+        divergence_flagged = _res.divergence_flag
+
+        if internal_target:
+            print(f"  Internal PT: ${internal_target:.2f}  source={pt_source}  "
+                  f"models={list(pt_model_breakdown.keys())}  "
+                  f"gates={_res.gates_fired}")
         else:
-            print("  Missing mktcap/shares/price — PT unavailable")
+            print("  PT engine returned None — insufficient model fit")
+    else:
+        print("  Missing mktcap/shares/price — PT unavailable")
 
     analyst_target = cv(analyst.get("target_mean"))
-    if internal_target and analyst_target and analyst_target>0 and last_price and last_price>0:
-        divergence         = abs(internal_target-analyst_target)/last_price
-        divergence_flagged = divergence > ANALYST_DIVERGENCE_THRESHOLD
-        pt_source          = "M*" if divergence_flagged else "M✓"
 
     upside_pct = ((internal_target/last_price)-1)*100 if (
         internal_target and last_price and last_price>0) else None

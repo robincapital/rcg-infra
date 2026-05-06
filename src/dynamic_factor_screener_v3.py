@@ -2247,7 +2247,11 @@ def main(market_cap_preset=None, fed_target_rate=None, fed_neutral_rate=None,
                              industry_medians=industry_medians)
     print(f"  {screened.height} passed industry outperformance + fundamental + exclusion screen")
 
-    SENTIMENT_POOL = min(screened.height, MAX_RESULTS * 2)
+    # Day 5 (Phase 1): bumped from 2x to max(2x, 100). The 2x rule (=80) was
+    # leaving 5-10 names per run with pt_source=N/A — names that ranked into
+    # the final top-40 only after Finnhub data shifted scores, but never had
+    # Finnhub fetched because they were rank 81-100 pre-fetch.
+    SENTIMENT_POOL = min(screened.height, max(MAX_RESULTS * 2, 100))
     preliminary = apply_dynamic_scores(screened, weights)
     top_tickers = preliminary["ticker"].to_list()[:SENTIMENT_POOL]
     print(f"  Top {len(top_tickers)} candidates selected for API lookups")
