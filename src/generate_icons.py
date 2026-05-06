@@ -14,77 +14,106 @@ GOLD2  = (224, 188, 92)       # --gold2 highlight
 BORDER = (38, 38, 38)         # --border
 
 
-def find_bold_font(size):
-    """Best-effort font discovery on NixOS."""
-    candidates = [
-        "/run/current-system/sw/share/fonts/dejavu/DejaVuSans-Bold.ttf",
-        "/nix/store/*/share/fonts/truetype/DejaVuSans-Bold.ttf",
-        "DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    ]
+def find_bold_font_path():
+    """
+    Resolve a real bold TTF on this NixOS box. Prefer matplotlib's bundled
+    DejaVuSans-Bold (most reliable), fall back to fontconfig-listed fonts,
+    finally fall back to PIL's bitmap default (which is tiny — caller should warn).
+    """
+    # 1) matplotlib bundles fonts at well-known relative path
+    try:
+        import matplotlib
+        candidate = Path(matplotlib.get_data_path()) / "fonts" / "ttf" / "DejaVuSans-Bold.ttf"
+        if candidate.exists():
+            return str(candidate)
+    except Exception:
+        pass
+
+    # 2) fontconfig discovery
+    import subprocess
+    try:
+        out = subprocess.run(["fc-match", "-f", "%{file}", "DejaVu Sans:bold"],
+                             capture_output=True, text=True, timeout=3)
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    except Exception:
+        pass
+
+    # 3) glob fallback
     import glob
-    for c in candidates:
-        for path in glob.glob(c):
-            try:
-                return ImageFont.truetype(path, size)
-            except Exception:
-                pass
-    # fallback to default — coarse, but works
-    return ImageFont.load_default()
+    for pattern in ("/nix/store/*/share/fonts/truetype/DejaVuSans-Bold.ttf",
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"):
+        for path in glob.glob(pattern):
+            return path
+
+    return None
 
 
-def draw_icon(size: int) -> Image.Image:
-    """Square gold-on-black RCG icon with inset border ring."""
+def draw_icon(size: int, font_path: str | None) -> Image.Image:
+    """Square gold-on-black RCG icon with bold readable RCG mark."""
     img = Image.new("RGB", (size, size), BG)
     d = ImageDraw.Draw(img)
 
-    # Outer rounded rectangle frame (thin gold border)
-    margin = max(2, size // 32)
-    border_w = max(1, size // 80)
+    # Outer rounded frame
+    margin = max(2, size // 24)
+    border_w = max(2, size // 56)
     d.rounded_rectangle(
         [margin, margin, size - margin - 1, size - margin - 1],
-        radius=size // 8,
+        radius=size // 7,
         outline=GOLD,
         width=border_w,
     )
-    # Subtle inner shadow ring
-    inner = margin + border_w + max(1, size // 60)
-    d.rounded_rectangle(
-        [inner, inner, size - inner - 1, size - inner - 1],
-        radius=size // 10,
-        outline=BORDER,
-        width=1,
-    )
 
-    # Centered "RCG" text in gold, bold
+    # Centered "RCG" — fill majority of inner area
     text = "RCG"
-    # Choose a font size that fills ~52% of icon width
-    target_height = int(size * 0.42)
-    font = find_bold_font(target_height)
-    bbox = d.textbbox((0, 0), text, font=font)
+    if font_path:
+        # Iterate to find the largest font size that fits horizontally.
+        max_text_w = size - margin * 4
+        max_text_h = size - margin * 4
+        # Start at roughly 70% of icon size, shrink until text fits both width + height
+        font_size = int(size * 0.70)
+        while font_size > 8:
+            font = ImageFont.truetype(font_path, font_size)
+            bbox = d.textbbox((0, 0), text, font=font)
+            tw = bbox[2] - bbox[0]
+            th = bbox[3] - bbox[1]
+            if tw <= max_text_w and th <= max_text_h:
+                break
+            font_size -= 4
+    else:
+        # PIL default — will look terrible, but avoid hard-failing
+        font = ImageFont.load_default()
+        bbox = d.textbbox((0, 0), text, font=font)
+
     tw = bbox[2] - bbox[0]
     th = bbox[3] - bbox[1]
     tx = (size - tw) // 2 - bbox[0]
     ty = (size - th) // 2 - bbox[1]
-    # Drop a tiny shadow underneath for depth
-    d.text((tx + max(1, size // 200), ty + max(1, size // 200)), text,
-           font=font, fill=(0, 0, 0))
+
+    # Drop shadow + main text
+    shadow = max(1, size // 90)
+    d.text((tx + shadow, ty + shadow), text, font=font, fill=(0, 0, 0))
     d.text((tx, ty), text, font=font, fill=GOLD2)
 
-    # Tiny tick marker — small inset square in lower-right (subtly indicates "data feed live")
-    tick_w = max(4, size // 16)
-    tick_x0 = size - margin - tick_w * 2
-    tick_y0 = size - margin - tick_w * 2
+    # Tiny live-feed dot lower right
+    dot_r = max(3, size // 24)
+    dot_cx = size - margin - dot_r - max(1, size // 60)
+    dot_cy = size - margin - dot_r - max(1, size // 60)
     d.ellipse(
-        [tick_x0, tick_y0, tick_x0 + tick_w, tick_y0 + tick_w],
-        fill=(46, 255, 156),  # green-bright
+        [dot_cx - dot_r, dot_cy - dot_r, dot_cx + dot_r, dot_cy + dot_r],
+        fill=(46, 255, 156),
     )
     return img
 
 
 def main():
+    font_path = find_bold_font_path()
+    if font_path:
+        print(f"  font: {font_path}")
+    else:
+        print("  WARNING: no bold TTF found; falling back to PIL default (text will be tiny)")
     for sz in (192, 512):
-        img = draw_icon(sz)
+        img = draw_icon(sz, font_path)
         out = OUT_DIR / f"icon-{sz}.png"
         img.save(out, "PNG", optimize=True)
         print(f"  wrote {out} ({out.stat().st_size} bytes)")
