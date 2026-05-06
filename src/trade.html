@@ -2,7 +2,19 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>RCG Live Trading</title>
+<!-- PWA / iOS home-screen install -->
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#0a0a0a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="RCG">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="apple-touch-icon" sizes="192x192" href="/icon-192.png">
+<link rel="apple-touch-icon" sizes="512x512" href="/icon-512.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png">
 <style>
   :root {
     --bg: #0a0a0a; --panel: #131313; --panel2: #1a1a1a; --border: #262626;
@@ -163,6 +175,44 @@
   .lvl-card.entry .val  { color: var(--green); }
   .lvl-card.target .val { color: var(--green-bright); }
   .lvl-card.stop .val   { color: var(--red); }
+
+  /* ─── Mobile responsive (phone PWA) ─── */
+  @media (max-width: 900px) {
+    body { font-size: 13px; }
+    .container { grid-template-columns: 1fr; padding: 0.5rem; gap: 0.5rem; }
+    .panel { max-height: none; }
+    .header { padding: 0.4rem 0.6rem; }
+    .header-row { gap: 0.6rem; }
+    .header h1 { font-size: 13px; letter-spacing: 0.5px; }
+    .macro-chip { font-size: 11px; padding: 0.15rem 0.5rem; }
+    .nav-link { font-size: 11px; padding: 0.15rem 0.3rem; }
+    /* Less-critical Top-40 columns hidden on phones */
+    #top-tbl th:nth-child(4),  #top-tbl td:nth-child(4),
+    #top-tbl th:nth-child(5),  #top-tbl td:nth-child(5),
+    #top-tbl th:nth-child(10), #top-tbl td:nth-child(10),
+    #top-tbl th:nth-child(11), #top-tbl td:nth-child(11),
+    #top-tbl th:nth-child(13), #top-tbl td:nth-child(13)
+      { display: none; }
+    /* Movers panel: drop EOD + Vol columns on phone */
+    #movers-tbl th:nth-child(3), #movers-tbl td:nth-child(3),
+    #movers-tbl th:nth-child(6), #movers-tbl td:nth-child(6)
+      { display: none; }
+    /* Bigger tap targets */
+    td.tkr { padding: 10px 8px; min-width: 56px; font-size: 13px; }
+    th { padding: 9px 8px; }
+    .badge { padding: 4px 10px; font-size: 11px; min-width: 70px; }
+    .legend { font-size: 11px; }
+    .legend .badge { font-size: 9px; min-width: 50px; padding: 2px 6px; }
+    .detail-top { grid-template-columns: 1fr; }
+    .stats-grid { grid-template-columns: 1fr 1fr; }
+    .levels-strip { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 520px) {
+    .macro-chip:nth-child(n+5) { display: none; }
+    #top-tbl th:nth-child(7), #top-tbl td:nth-child(7) { display: none; }
+    .header h1 { display: none; }
+    .stats-grid { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
