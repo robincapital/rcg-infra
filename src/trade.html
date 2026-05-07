@@ -931,6 +931,120 @@
     `;
   }
 
+  // ── Prediction history chart (time-series from rcg_signals DB) ───
+  // Fetched async on ticker expand; renders SVG line of pred_signed_score
+  // over time + threshold zones + intraday_move overlay for context.
+  const PREDICTION_HISTORY_HOURS = 48;
+  async function fetchPredictionHistory(ticker) {
+    try {
+      const r = await fetch(`http://${location.hostname}:8085/predictions/${encodeURIComponent(ticker)}?hours=${PREDICTION_HISTORY_HOURS}`);
+      if (!r.ok) throw new Error('history ' + r.status);
+      return await r.json();
+    } catch (e) {
+      console.error('prediction history fetch failed', e);
+      return null;
+    }
+  }
+
+  function buildPredictionHistoryChart(data) {
+    const rows = data?.rows || [];
+    if (rows.length < 2) {
+      return '<div class="empty" style="padding:0.5rem;font-size:11px">' +
+             (rows.length === 1
+               ? `Only 1 snapshot in last ${PREDICTION_HISTORY_HOURS}h — need more captures for a meaningful chart.`
+               : `No prediction history captured for this ticker yet.`) +
+             '</div>';
+    }
+
+    const W = 760, H = 200, PT = 12, PB = 24, PL = 44, PR = 12;
+    const tsToX = (() => {
+      const t0 = new Date(rows[0].ts).getTime();
+      const t1 = new Date(rows[rows.length - 1].ts).getTime();
+      const span = Math.max(1, t1 - t0);
+      return (ts) => PL + ((new Date(ts).getTime() - t0) / span) * (W - PL - PR);
+    })();
+    // Y-axis: signedScore in [-100, +100]
+    const y = (v) => PT + (1 - (v + 100) / 200) * (H - PT - PB);
+
+    // Threshold zone bands
+    const breakoutTop    = y(100);
+    const breakoutBot    = y(65);
+    const breakdownTop   = y(-65);
+    const breakdownBot   = y(-100);
+
+    // Main line: pred_signed_score
+    const points = rows.map(r => ({
+      x: tsToX(r.ts),
+      y: y(r.pred_signed_score ?? 0),
+      v: r.pred_signed_score ?? 0,
+      ts: r.ts,
+      action: r.pred_action || 'NEUTRAL',
+    }));
+    const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+
+    // Markers colored by action label
+    const actionColor = (a) => {
+      if (a === 'BREAKOUT' || a === 'PRE-BREAKOUT') return 'var(--green-bright)';
+      if (a === 'STRONG' || a === 'WATCH')          return 'var(--green)';
+      if (a === 'BREAKDOWN' || a === 'PRE-BREAKDOWN') return 'var(--red-bright)';
+      if (a === 'WEAKENING')                         return 'var(--orange)';
+      return 'var(--dim)';
+    };
+    const markers = points.map(p =>
+      `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3" fill="${actionColor(p.action)}" stroke="#000" stroke-width="0.5">
+         <title>${new Date(p.ts).toLocaleString()} · signed ${p.v >= 0 ? '+' : ''}${Math.round(p.v)} · ${p.action}</title>
+       </circle>`
+    ).join('');
+
+    // Stats summary
+    const scores = rows.map(r => r.pred_signed_score ?? 0);
+    const minS = Math.min(...scores), maxS = Math.max(...scores);
+    const meanS = scores.reduce((a, b) => a + b, 0) / scores.length;
+    const latest = rows[rows.length - 1];
+    const actionCounts = {};
+    rows.forEach(r => { actionCounts[r.pred_action || 'NEUTRAL'] = (actionCounts[r.pred_action || 'NEUTRAL'] || 0) + 1; });
+    const actionStr = Object.entries(actionCounts).sort((a, b) => b[1] - a[1])
+                       .map(([k, n]) => `${k}:${n}`).join(' · ');
+
+    // Time labels (first, last, mid)
+    const fmtT = (ts) => {
+      const d = new Date(ts);
+      return d.toLocaleTimeString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    };
+
+    return `
+      <div class="chart-wrap" style="margin-top:0.4rem">
+        <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+          <!-- threshold zone bands -->
+          <rect x="${PL}" y="${breakoutTop}"  width="${W - PL - PR}" height="${breakoutBot - breakoutTop}"  fill="var(--green)" opacity="0.06"/>
+          <rect x="${PL}" y="${breakdownTop}" width="${W - PL - PR}" height="${breakdownBot - breakdownTop}" fill="var(--red)"   opacity="0.08"/>
+          <!-- horizontal reference lines at +65, +25, 0, -25, -65 -->
+          ${[ [65, 'breakout'], [25, 'watch'], [0, 'zero'], [-25, 'weakening'], [-65, 'breakdown'] ].map(([v, label]) =>
+            `<line x1="${PL}" y1="${y(v)}" x2="${W - PR}" y2="${y(v)}"
+                   stroke="${v === 0 ? 'var(--inf-7)' : 'var(--border)'}"
+                   stroke-width="${v === 0 ? '1' : '0.5'}"
+                   stroke-dasharray="${v === 0 ? '0' : '2,3'}"/>
+             <text x="${PL - 4}" y="${y(v) + 3}" text-anchor="end" fill="var(--dim)" font-size="9">${v > 0 ? '+' : ''}${v}</text>`
+          ).join('')}
+          <!-- main signedScore line + markers -->
+          <path d="${linePath}" fill="none" stroke="var(--inf-2)" stroke-width="1.5"/>
+          ${markers}
+          <!-- x-axis labels -->
+          <text x="${PL}"        y="${H - 6}" text-anchor="start"  fill="var(--dim)" font-size="9">${fmtT(rows[0].ts)}</text>
+          <text x="${(PL + W - PR) / 2}" y="${H - 6}" text-anchor="middle" fill="var(--dim)" font-size="9">${rows.length} snapshots over ${data.hours}h</text>
+          <text x="${W - PR}"    y="${H - 6}" text-anchor="end"    fill="var(--dim)" font-size="9">${fmtT(rows[rows.length-1].ts)}</text>
+        </svg>
+        <div class="chart-legend-row" style="font-size:10px">
+          <span>Range: <b style="color:${minS < -25 ? 'var(--red)' : 'var(--text)'}">${minS >= 0 ? '+' : ''}${Math.round(minS)}</b>
+            → <b style="color:${maxS > 25 ? 'var(--green)' : 'var(--text)'}">${maxS >= 0 ? '+' : ''}${Math.round(maxS)}</b></span>
+          <span>Mean: <b>${meanS >= 0 ? '+' : ''}${meanS.toFixed(1)}</b></span>
+          <span>Latest: <b>${(latest.pred_signed_score ?? 0) >= 0 ? '+' : ''}${Math.round(latest.pred_signed_score ?? 0)}</b> · ${latest.pred_action || 'NEUTRAL'}</span>
+          <span style="margin-left:auto;color:var(--dim)">${actionStr}</span>
+        </div>
+      </div>
+    `;
+  }
+
   // ── Catalysts panel (news + recs + insider) ─────────────────
   function buildCatalystsPanel(row) {
     if (!row.fh) return '<div class="pred-history">No Finnhub data yet for ' + row.ticker + ' — next snapshot at HH:05 / HH:35 ET</div>';
@@ -1123,6 +1237,10 @@
     const stats = buildStatsPanel(row);
     const levels = buildLevelsStrip(row);
     const catalysts = buildCatalystsPanel(row);
+    const historyId = `pred-history-${row.ticker}`;
+    const historyPlaceholder =
+      `<div id="${historyId}"><div class="empty" style="padding:0.5rem;font-size:11px">` +
+      `loading prediction history…</div></div>`;
     return `<tr class="detail-row"><td colspan="17">
       <div class="detail-top">
         <div>${chart}</div>
@@ -1130,6 +1248,11 @@
       </div>
       ${levels}
       ${catalysts}
+      <div style="margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid var(--border);">
+        <h4 style="margin:0 0 0.3rem 0;font-size:10px;color:var(--gold);text-transform:uppercase;letter-spacing:0.5px;">
+          Prediction History (last ${PREDICTION_HISTORY_HOURS}h, captured every 30 min)</h4>
+        ${historyPlaceholder}
+      </div>
       <div class="detail-grid">${cards}</div>
       ${modelRows ? `
       <div class="detail-models">
@@ -1306,6 +1429,18 @@ Signal: ${m.insSignal ?? 'neutral'}`;
     // Re-attach click handlers on the ticker cells
     tbody.querySelectorAll('td.tkr[data-ticker]').forEach(td => {
       td.addEventListener('click', () => toggleDetail(td.dataset.ticker));
+    });
+    // Lazy-load prediction history charts for any expanded tickers
+    expanded.forEach(ticker => {
+      const placeholder = document.getElementById(`pred-history-${ticker}`);
+      if (!placeholder || placeholder.dataset.loaded === '1') return;
+      placeholder.dataset.loaded = '1';
+      fetchPredictionHistory(ticker).then(data => {
+        const el = document.getElementById(`pred-history-${ticker}`);
+        if (el) el.innerHTML = data
+          ? buildPredictionHistoryChart(data)
+          : '<div class="empty" style="padding:0.5rem;font-size:11px;color:var(--red)">history fetch failed — check sentiment_refresh_server is running on port 8085</div>';
+      });
     });
     const counts = rows.reduce((acc, r) => {
       const k = r.action?.l || 'NOISE';

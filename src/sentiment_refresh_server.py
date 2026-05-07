@@ -138,6 +138,68 @@ class RefreshHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(response).encode())
 
+        elif self.path.startswith("/predictions/"):
+            # GET /predictions/<TICKER>?hours=24
+            #
+            # Returns the captured live_prediction history for a single ticker
+            # over the last N hours, pivoted into one row per snapshot with all
+            # captured signal columns. Powers the per-ticker time-series chart
+            # in the dashboard's expanded detail row.
+            try:
+                from urllib.parse import urlparse, parse_qs
+                import psycopg
+                parsed = urlparse(self.path)
+                ticker = parsed.path.split("/")[-1].upper()
+                qs = parse_qs(parsed.query)
+                hours = int(qs.get("hours", ["24"])[0])
+                hours = max(1, min(hours, 24 * 14))   # clamp 1h–14d
+
+                # Query all signals for this ticker over the window, joined to
+                # runs so we can pivot by run_id (each fire = one snapshot row).
+                with psycopg.connect(
+                    "host=/run/postgresql user=nixos dbname=rcg_signals"
+                ) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            SELECT s.run_id, r.run_timestamp,
+                                   s.signal_name, s.signal_value, s.signal_string
+                            FROM signals s
+                            JOIN runs r ON s.run_id = r.run_id
+                            WHERE r.run_type = 'live_prediction'
+                              AND s.ticker = %s
+                              AND r.run_timestamp > NOW() - (%s || ' hours')::interval
+                            ORDER BY r.run_timestamp ASC, s.signal_name
+                            """,
+                            (ticker, str(hours)),
+                        )
+                        rows = cur.fetchall()
+
+                # Pivot: one record per run_id (each fire = one snapshot)
+                by_run = {}
+                for run_id, run_ts, name, val, sval in rows:
+                    rec = by_run.setdefault(run_id, {"run_id": run_id, "ts": run_ts.isoformat()})
+                    rec[name] = val if val is not None else sval
+
+                # Sort chronologically and emit
+                snapshots = sorted(by_run.values(), key=lambda r: r["ts"])
+                response = {
+                    "ticker": ticker,
+                    "hours":  hours,
+                    "rows":   snapshots,
+                }
+                self.send_response(200)
+                for k, v in headers.items():
+                    self.send_header(k, v)
+                self.end_headers()
+                self.wfile.write(json.dumps(response, default=str).encode())
+            except Exception as e:
+                self.send_response(500)
+                for k, v in headers.items():
+                    self.send_header(k, v)
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode())
+
         else:
             self.send_response(404)
             self.end_headers()
