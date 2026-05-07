@@ -58,9 +58,10 @@
   .panel-movers       { grid-column: 1; grid-row: 1; }
   .panel-correlations { grid-column: 1; grid-row: 2; }
   .panel-top          { grid-column: 2; grid-row: 1 / span 2; }
+  .panel-leaderboard  { grid-column: 1 / span 2; grid-row: 3; }
   @media (max-width: 900px) {
     .container { grid-template-columns: 1fr; grid-template-rows: none; }
-    .panel-movers, .panel-correlations, .panel-top { grid-column: 1; grid-row: auto; }
+    .panel-movers, .panel-correlations, .panel-top, .panel-leaderboard { grid-column: 1; grid-row: auto; }
   }
   .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
            display: flex; flex-direction: column; max-height: calc(100vh - 110px); }
@@ -292,6 +293,28 @@
   .heatmap td.cell.diag  { background: var(--panel2); color: var(--dim);
                             border-color: var(--border); }
 
+  /* ─── Model Tournament Leaderboard ─── */
+  .leaderboard-wrap { padding: 0.4rem 1rem; max-height: 380px; overflow-y: auto; }
+  .leaderboard-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .leaderboard-table th, .leaderboard-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); }
+  .leaderboard-table th { background: var(--panel2); color: var(--dim); text-align: right;
+                          position: sticky; top: 0; cursor: default; font-weight: 600;
+                          border-bottom: 1px dotted rgba(201,168,76,0.4); }
+  .leaderboard-table th.lab, .leaderboard-table td.lab { text-align: left; }
+  .leaderboard-table td.num { text-align: right; font-family: monospace; }
+  .leaderboard-table tr.hi-ic td { background: rgba(0,201,122,0.08); }
+  .leaderboard-table tr.lo-ic td { background: rgba(255,77,77,0.06); }
+  .leaderboard-section td { background: var(--panel2); color: var(--gold);
+                            font-size: 10px; text-transform: uppercase;
+                            letter-spacing: 1px; }
+  .leaderboard-meta { padding: 0.4rem 1rem; color: var(--dim); font-size: 10px;
+                      border-top: 1px solid var(--border); }
+  .ic-cell.pos       { color: var(--green); font-weight: bold; }
+  .ic-cell.pos-strong{ color: var(--green-bright); font-weight: bold; }
+  .ic-cell.neg       { color: var(--red); }
+  .ic-cell.neg-strong{ color: var(--red-bright); font-weight: bold; }
+  .ic-cell.dim       { color: var(--dim); }
+
   .levels-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
                   gap: 4px; padding: 0.4rem 0; }
   .lvl-card { background: var(--panel); padding: 4px 8px; border-radius: 3px; border: 1px solid var(--border);
@@ -460,6 +483,14 @@
       </table>
     </div>
     <div class="meta" id="top-meta">—</div>
+  </div>
+
+  <div class="panel panel-leaderboard">
+    <h2>Model Tournament — Per-Model IC Leaderboard</h2>
+    <div class="leaderboard-wrap" id="leaderboard-wrap">
+      <div class="empty loading">loading model tournament results…</div>
+    </div>
+    <div class="leaderboard-meta" id="leaderboard-meta">—</div>
   </div>
 </div>
 
@@ -987,6 +1018,98 @@
         Prediction history for ${row.ticker}: capturing every 5 min · check back in a few days for assertiveness stats
       </div>
     `;
+  }
+
+  // ── Model Tournament leaderboard ────────────────────────────────
+  const LEADERBOARD_URL = '/leaderboard.json';
+  let leaderboardData = null;
+
+  async function fetchLeaderboard() {
+    try {
+      const r = await fetch(LEADERBOARD_URL + '?_=' + Date.now(), { cache: 'no-cache' });
+      if (!r.ok) throw new Error('leaderboard ' + r.status);
+      leaderboardData = await r.json();
+      return leaderboardData;
+    } catch (e) {
+      console.error('leaderboard fetch failed', e);
+      return null;
+    }
+  }
+
+  function icClass(v) {
+    if (v == null || !isFinite(v)) return 'dim';
+    if (v >=  0.10) return 'pos-strong';
+    if (v >=  0.02) return 'pos';
+    if (v <= -0.10) return 'neg-strong';
+    if (v <= -0.02) return 'neg';
+    return 'dim';
+  }
+
+  function renderLeaderboard() {
+    const wrap = document.getElementById('leaderboard-wrap');
+    if (!leaderboardData || !leaderboardData.results) {
+      wrap.innerHTML = '<div class="empty">no leaderboard data — script may not have run yet</div>';
+      return;
+    }
+    const results = leaderboardData.results;
+    const horizons = leaderboardData.horizons || ['30min', '60min', '4h'];
+
+    // Group by horizon, sort each group by IC desc
+    const byHorizon = {};
+    horizons.forEach(h => byHorizon[h] = []);
+    results.forEach(r => { if (byHorizon[r.horizon]) byHorizon[r.horizon].push(r); });
+    Object.values(byHorizon).forEach(arr => {
+      arr.sort((a, b) => (b.ic_directional ?? -2) - (a.ic_directional ?? -2));
+    });
+
+    const fmtPct = (v, d=1) => v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(d) + '%';
+    const fmtIC = (v, d=3) => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(d);
+
+    let html = `<table class="leaderboard-table">
+      <thead><tr>
+        <th class="lab">Model</th><th>n</th><th>n-strong</th>
+        <th>Hit-rate (sign-match)</th><th>IC (directional)</th><th>IC (Spearman)</th>
+        <th>Avg |score|</th><th>Avg realized</th>
+      </tr></thead><tbody>`;
+
+    horizons.forEach(h => {
+      html += `<tr class="leaderboard-section"><td colspan="8">Horizon: ${h}</td></tr>`;
+      const rows = byHorizon[h] || [];
+      if (rows.length === 0) {
+        html += `<tr><td colspan="8" class="empty">no entrants yet</td></tr>`;
+        return;
+      }
+      rows.forEach((r, idx) => {
+        const ic = r.ic_directional;
+        const cls = idx === 0 && (ic ?? 0) > 0.05 ? 'hi-ic' :
+                    idx === rows.length - 1 && (ic ?? 0) < -0.05 ? 'lo-ic' : '';
+        html += `<tr class="${cls}">
+          <td class="lab">${r.model}</td>
+          <td class="num">${r.n}</td>
+          <td class="num">${r.n_strong ?? '—'}</td>
+          <td class="num ${r.hit_rate != null && r.hit_rate >= 0.55 ? 'ic-cell pos' :
+                          r.hit_rate != null && r.hit_rate <= 0.45 ? 'ic-cell neg' : 'ic-cell dim'}">
+            ${r.hit_rate != null ? (r.hit_rate * 100).toFixed(1) + '%' : '—'}
+          </td>
+          <td class="num ic-cell ${icClass(ic)}">${fmtIC(ic)}</td>
+          <td class="num ic-cell ${icClass(r.ic_spearman)}">${fmtIC(r.ic_spearman)}</td>
+          <td class="num">${r.avg_score_abs ?? '—'}</td>
+          <td class="num ic-cell ${icClass((r.avg_realized ?? 0) / 100)}">${r.avg_realized != null ? (r.avg_realized >= 0 ? '+' : '') + r.avg_realized.toFixed(3) + '%' : '—'}</td>
+        </tr>`;
+      });
+    });
+
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+
+    const meta = document.getElementById('leaderboard-meta');
+    if (meta) {
+      const ts = leaderboardData.generated_at;
+      const totalN = results.reduce((a, r) => a + (r.n || 0), 0);
+      meta.innerHTML = `Computed ${ts ? new Date(ts).toLocaleString() : '—'} · ${totalN} total prediction-outcome pairs across all models · ` +
+        `<span style="color:var(--gold)">Need ~5+ days of data per model for reliable IC.</span> ` +
+        `Tournament refreshes daily after the morning forward-returns pass.`;
+    }
   }
 
   // ── Cross-asset correlation heatmap ──────────────────────────────
@@ -2023,6 +2146,10 @@ Signal: ${m.insSignal ?? 'neutral'}`;
   fetchCorrelations().then(() => renderCorrelationHeatmap());
   // Refresh every 6h (data only updates daily after Sharadar)
   setInterval(() => fetchCorrelations().then(() => renderCorrelationHeatmap()), 6 * 3600 * 1000);
+
+  // ── Leaderboard: load once, refresh hourly (computed daily on server) ──
+  fetchLeaderboard().then(() => renderLeaderboard());
+  setInterval(() => fetchLeaderboard().then(() => renderLeaderboard()), 60 * 60 * 1000);
 
   refresh();
   setInterval(refresh, REFRESH_MS);

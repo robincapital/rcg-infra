@@ -49,24 +49,29 @@ def signal_name_for(horizon_label: str) -> str:
 def main() -> None:
     cutoff = datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HOURS)
 
+    # We process BOTH live_prediction (the main BBG predictive composite) AND
+    # model_score runs (the tournament entrants). Both tables capture live_price
+    # per ticker per fire, so the same diff-successive-snapshots logic applies.
+    RUN_TYPES = ("live_prediction", "model_score")
+
     with psycopg.connect("host=/run/postgresql user=nixos dbname=rcg_signals") as conn:
-        # ─── Pull all live_prediction (run_id, ticker, ts, live_price) ─────
+        # ─── Pull all (run_id, ticker, ts, live_price) for relevant run types
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT s.run_id, s.ticker, r.run_timestamp, s.signal_value
                 FROM signals s JOIN runs r ON s.run_id = r.run_id
-                WHERE r.run_type    = 'live_prediction'
+                WHERE r.run_type    = ANY(%s)
                   AND s.signal_name = 'live_price'
                   AND r.run_timestamp >= %s
                 ORDER BY s.ticker ASC, r.run_timestamp ASC
                 """,
-                (cutoff,),
+                (list(RUN_TYPES), cutoff),
             )
             rows = cur.fetchall()
 
         # ─── Pull all already-computed realized_return signals (skip set) ──
-        already = set()  # (run_id, signal_name)
+        already = set()
         for h_label, _, _ in HORIZONS:
             sn = signal_name_for(h_label)
             with conn.cursor() as cur:
@@ -74,11 +79,11 @@ def main() -> None:
                     """
                     SELECT s.run_id, s.ticker
                     FROM signals s JOIN runs r ON s.run_id = r.run_id
-                    WHERE r.run_type    = 'live_prediction'
+                    WHERE r.run_type    = ANY(%s)
                       AND s.signal_name = %s
                       AND r.run_timestamp >= %s
                     """,
-                    (sn, cutoff),
+                    (list(RUN_TYPES), sn, cutoff),
                 )
                 for run_id, ticker in cur.fetchall():
                     already.add((run_id, ticker, sn))
