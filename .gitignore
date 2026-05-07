@@ -56,3 +56,6 @@ src/CONTEXT_signal_capture.md
 # runtime state from finnhub_signals.py
 src/finnhub_signals.json
 src/.finnhub_cache.json
+
+# runtime user-pinned tickers (per-installation state)
+src/user_pinned.json

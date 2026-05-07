@@ -2541,9 +2541,25 @@ def main(market_cap_preset=None, fed_target_rate=None, fed_neutral_rate=None,
         except Exception as _e:
             print(f"  [WARN] cap-bucket picks failed: {_e} — falling back to top-40 only")
 
-        final_watchlist = list(dict.fromkeys(macro + top_tickers_for_bbg + cap_picks))
+        # Merge user-pinned ("starred"/ad-hoc) tickers — these survive every
+        # screener regeneration and are force-included even past the 120 cap.
+        pinned = []
+        try:
+            pinned_path = Path("/home/nixos/Prod/V1/src/user_pinned.json")
+            if pinned_path.exists():
+                pinned = [t.upper() for t in (
+                    _json.loads(pinned_path.read_text()).get("pinned") or []
+                ) if isinstance(t, str)]
+        except Exception as _e:
+            print(f"  [WARN] could not read user_pinned.json: {_e}")
+
+        final_watchlist = list(dict.fromkeys(macro + pinned + top_tickers_for_bbg + cap_picks))
         # Cap at 120 to keep BBG pull reasonable (~30s at hourly cadence)
         final_watchlist = final_watchlist[:120]
+        # Force-include any pinned that got cropped (user expects them tracked)
+        for _t in pinned:
+            if _t not in final_watchlist:
+                final_watchlist.append(_t)
 
         notes = {
             "SPY": "Macro proxy", "VIX": "Volatility regime", "TLT": "Long-rate regime",
@@ -2562,6 +2578,11 @@ def main(market_cap_preset=None, fed_target_rate=None, fed_neutral_rate=None,
             score = row.get("composite_score")
             score_str = f"{score:.2f}" if score is not None else "?"
             notes[t] = f"{sect} | composite {score_str}"
+        # Pinned tickers get an explicit note so the dashboard can identify
+        # them even if they never appear in the screener output.
+        for _t in pinned:
+            if _t not in notes:
+                notes[_t] = "user-pinned"
 
         watchlist_obj = {
             "tickers":           final_watchlist,

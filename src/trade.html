@@ -249,6 +249,21 @@
   .toolbar .btn-group button.active { background: var(--gold); color: #0d0d0d; font-weight: bold; }
   .toolbar .btn-group button.bear.active { background: var(--inf-5); color: #fff; }
   .toolbar .btn-group button.bull.active { background: var(--green); color: #0d0d0d; }
+  .toolbar .btn-group button.starred.active { background: var(--gold); color: #0d0d0d; font-weight: bold; }
+  .toolbar input.adhoc { background: var(--panel); color: var(--text); border: 1px solid var(--border);
+                         border-radius: 3px; padding: 4px 8px; font-family: monospace; font-size: 11px;
+                         width: 92px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .toolbar input.adhoc:focus { outline: none; border-color: var(--gold); }
+  .toolbar button.adhoc-add { background: var(--panel2); color: var(--gold); border: 1px solid var(--gold);
+                              border-radius: 3px; padding: 4px 10px; font-size: 11px; font-weight: bold;
+                              cursor: pointer; font-family: inherit; }
+  .toolbar button.adhoc-add:hover { background: var(--gold); color: #0d0d0d; }
+  .toolbar button.adhoc-add:disabled { opacity: 0.55; cursor: wait; }
+  .star-btn { display: inline-block; cursor: pointer; user-select: none; color: var(--dim);
+              font-size: 14px; padding: 0 4px 0 0; transition: color 0.15s; line-height: 1; }
+  .star-btn:hover { color: var(--gold); }
+  .star-btn.pinned { color: var(--gold); }
+  .star-btn.busy { opacity: 0.5; cursor: wait; }
   .toolbar .separator { color: var(--border); padding: 0 0.2rem; }
   .toolbar .fed-rate { color: var(--gold2); font-family: monospace; font-size: 11px; cursor: help;
                        padding: 4px 8px; border: 1px dashed var(--border); border-radius: 3px; }
@@ -402,6 +417,17 @@
   <span class="lbl">Fed:</span>
   <span class="fed-rate" id="fed-rate"
         title="Fed target rate / neutral rate used by today's price targets. Server-side editable in next update.">3.625% / 3.00%</span>
+  <span class="separator">·</span>
+  <span class="lbl">Track:</span>
+  <div class="btn-group" id="starred-group">
+    <button data-starred="0">All</button>
+    <button data-starred="1" class="starred">★ Starred</button>
+  </div>
+  <span class="separator">·</span>
+  <input class="adhoc" id="adhoc-ticker" placeholder="add ticker" maxlength="10"
+         title="Type any ticker (stock or ETF) and press + Pin or Enter. Bypasses screener filters and forces it into the BBG pull + analytics pipeline. Survives screener regenerations until you unstar it." />
+  <button class="adhoc-add" id="adhoc-add"
+          title="Pin the typed ticker — appended to watchlist, SCP'd to Windows, and triggers a Bloomberg pull so analytics populate immediately.">+ Pin</button>
   <span class="meta-info" id="filter-meta">—</span>
 </div>
 
@@ -507,9 +533,77 @@
 
   // ─── User filter state (persisted in localStorage) ───
   const filters = {
-    capBucket: localStorage.getItem('rcg.capBucket') || 'all',  // all | large | mid | small
-    userBias:  parseFloat(localStorage.getItem('rcg.userBias') || '0'),  // -1 | 0 | +1
+    capBucket:   localStorage.getItem('rcg.capBucket') || 'all',  // all | large | mid | small
+    userBias:    parseFloat(localStorage.getItem('rcg.userBias') || '0'),  // -1 | 0 | +1
+    starredOnly: localStorage.getItem('rcg.starredOnly') === '1',
   };
+  // ─── Pinned ("starred"/ad-hoc) tickers — synced from sentiment_refresh_server ───
+  // Same backend powers both the row-level ★ button AND the toolbar ad-hoc input.
+  // A ticker in this set is force-included in the watchlist, survives screener
+  // regen, and (on first pin) triggers a Bloomberg pull so its data populates.
+  let pinnedSet = new Set();
+  const PIN_BASE = 'http://rcg-nixos:8085/pinned';
+  async function loadPinned() {
+    try {
+      const r = await fetch(PIN_BASE);
+      const d = await r.json();
+      pinnedSet = new Set(d.pinned || []);
+    } catch (e) { console.warn('[pinned] load failed:', e); }
+  }
+  async function togglePin(ticker, btnEl) {
+    const isPinned = pinnedSet.has(ticker);
+    if (btnEl) btnEl.classList.add('busy');
+    try {
+      const r = await fetch(`${PIN_BASE}/${encodeURIComponent(ticker)}`,
+                            { method: isPinned ? 'DELETE' : 'POST' });
+      const d = await r.json();
+      pinnedSet = new Set(d.pinned || []);
+      renderMoversTable();
+      renderTopTable();
+    } catch (e) {
+      console.error('[pin] toggle failed', e);
+      alert(`Pin toggle failed: ${e.message || e}`);
+      if (btnEl) btnEl.classList.remove('busy');
+    }
+  }
+  async function addAdhocTicker() {
+    const input = document.getElementById('adhoc-ticker');
+    const btn   = document.getElementById('adhoc-add');
+    const t = (input.value || '').trim().toUpperCase();
+    if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(t)) {
+      alert('Invalid ticker — use 1-10 chars, letters/digits/.-');
+      return;
+    }
+    btn.disabled = true; btn.textContent = 'pinning…';
+    try {
+      const r = await fetch(`${PIN_BASE}/${encodeURIComponent(t)}`, { method: 'POST' });
+      const d = await r.json();
+      pinnedSet = new Set(d.pinned || []);
+      input.value = '';
+      // Auto-flip to Starred view so the user immediately sees the new ticker
+      filters.starredOnly = true;
+      localStorage.setItem('rcg.starredOnly', '1');
+      syncToolbarUI();
+      renderMoversTable();
+      renderTopTable();
+      btn.textContent = 'pulling BBG…';
+      // BBG pull is kicked server-side; wait ~18s for fresh prices then re-render
+      setTimeout(async () => {
+        await refresh();
+        btn.disabled = false; btn.textContent = '+ Pin';
+      }, 18000);
+    } catch (e) {
+      console.error('[adhoc] failed', e);
+      alert(`Pin failed: ${e.message || e}`);
+      btn.disabled = false; btn.textContent = '+ Pin';
+    }
+  }
+  function starHtml(ticker) {
+    const on = pinnedSet.has(ticker);
+    return `<span class="star-btn ${on ? 'pinned' : ''}" data-pin="${ticker}" `
+         + `title="${on ? 'Unpin · stops force-tracking this ticker' : 'Pin · keep tracking even if it drops out of the screener'}">`
+         + `${on ? '★' : '☆'}</span>`;
+  }
   const BIAS_OFFSET_MAGNITUDE = 25;  // points added/subtracted from signedScore display
 
   function biasOffset() {
@@ -1624,7 +1718,7 @@
                 : '';
     return `
       <tr>
-        <td class="tkr">${m.ticker}${pulse}</td>
+        <td class="tkr">${starHtml(m.ticker)}${m.ticker}${pulse}</td>
         <td>${fmtPx(m.livePx)}</td>
         <td class="neutral">${fmtPx(m.eod)}</td>
         <td class="${moveClass(m.move)}">${fmtPct(m.move)}</td>
@@ -1668,13 +1762,28 @@
       document.getElementById('movers-meta').textContent =
         `top 10 by ${st.col} (${st.dir === 1 ? 'asc' : 'desc'}) · ${all.length} eligible`;
     }
+    // Wire star clicks for the Movers table
+    tbody.querySelectorAll('.star-btn[data-pin]').forEach(s => {
+      s.addEventListener('click', (e) => {
+        e.stopPropagation();
+        togglePin(s.dataset.pin, s);
+      });
+    });
   }
   function renderTopTable() {
     const tbody = document.querySelector('#top-tbl tbody');
-    // 1. Need fundamental composite to rank
-    let rows = lastRows.filter(r => r.composite != null);
-    // 2. Mkt-cap bucket filter
-    rows = rows.filter(r => capBucketTest(r.mktcap));
+    // 1a. Starred-only mode: bypass cap/composite/action filters and show every
+    //     pinned ticker that we have data for. (Pinned tickers may be ad-hoc
+    //     additions with no screener composite — still want them visible.)
+    let rows;
+    if (filters.starredOnly) {
+      rows = lastRows.filter(r => pinnedSet.has(r.ticker));
+    } else {
+      // 1. Need fundamental composite to rank
+      rows = lastRows.filter(r => r.composite != null);
+      // 2. Mkt-cap bucket filter
+      rows = rows.filter(r => capBucketTest(r.mktcap));
+    }
     // 3. User-bias additive offset on signedScore (recompute action label)
     const offset = biasOffset();
     if (offset !== 0) {
@@ -1687,16 +1796,21 @@
                  actionRank:     actionLabel(adjusted, r.composite, r.move).rank };
       });
     }
-    // 4. Top-N by composite within the filtered subset
-    rows = rows.sort((a, b) => (b.composite ?? 0) - (a.composite ?? 0)).slice(0, 50);
-    // 5. Action-label filter (toggled via legend badge clicks)
-    if (actionFilter) {
-      rows = rows.filter(r => r.action?.l === actionFilter);
+    if (!filters.starredOnly) {
+      // 4. Top-N by composite within the filtered subset
+      rows = rows.sort((a, b) => (b.composite ?? 0) - (a.composite ?? 0)).slice(0, 50);
+      // 5. Action-label filter (toggled via legend badge clicks)
+      if (actionFilter) {
+        rows = rows.filter(r => r.action?.l === actionFilter);
+      }
     }
     // 6. User column sort
     rows = rows.sort(makeSorter(sortState.top));
     if (rows.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="17" class="empty">no fundamental + BBG overlap yet</td></tr>';
+      const empty = filters.starredOnly
+        ? 'no starred tickers yet — click ☆ on any row, or type a ticker in the toolbar and press + Pin'
+        : 'no fundamental + BBG overlap yet';
+      tbody.innerHTML = `<tr><td colspan="17" class="empty">${empty}</td></tr>`;
       document.getElementById('top-meta').textContent = '—';
       return;
     }
@@ -1720,7 +1834,7 @@
       html.push(`
         <tr>
           <td class="neutral">${m.rank ?? i+1}</td>
-          <td class="tkr" data-ticker="${m.ticker}">${m.ticker}</td>
+          <td class="tkr" data-ticker="${m.ticker}">${starHtml(m.ticker)}${m.ticker}</td>
           <td>${fmt(m.composite, 2)}</td>
           <td class="neutral">${fmtCap(m.mktcap)}</td>
           <td class="neutral">${fmtPx(m.eod)}</td>
@@ -1780,7 +1894,18 @@ Signal: ${m.insSignal ?? 'neutral'}`;
     tbody.innerHTML = html.join('');
     // Re-attach click handlers on the ticker cells
     tbody.querySelectorAll('td.tkr[data-ticker]').forEach(td => {
-      td.addEventListener('click', () => toggleDetail(td.dataset.ticker));
+      td.addEventListener('click', (e) => {
+        // Star click should NOT also expand the row
+        if (e.target.closest('.star-btn')) return;
+        toggleDetail(td.dataset.ticker);
+      });
+    });
+    // Star click: toggle pin (delegated; works for both Top 40 and Movers)
+    tbody.querySelectorAll('.star-btn[data-pin]').forEach(s => {
+      s.addEventListener('click', (e) => {
+        e.stopPropagation();
+        togglePin(s.dataset.pin, s);
+      });
     });
     // Lazy-load prediction history charts for any expanded tickers
     expanded.forEach(ticker => {
@@ -2103,6 +2228,10 @@ Signal: ${m.insSignal ?? 'neutral'}`;
     document.querySelectorAll('#bias-group button').forEach(b => {
       b.classList.toggle('active', parseFloat(b.dataset.bias) === filters.userBias);
     });
+    document.querySelectorAll('#starred-group button').forEach(b => {
+      const want = b.dataset.starred === '1';
+      b.classList.toggle('active', want === filters.starredOnly);
+    });
     const badge = document.getElementById('bias-badge');
     if (filters.userBias !== 0) {
       const isBull = filters.userBias > 0;
@@ -2112,11 +2241,15 @@ Signal: ${m.insSignal ?? 'neutral'}`;
     }
     const meta = document.getElementById('filter-meta');
     if (meta) {
-      const cap = filters.capBucket === 'all' ? 'all caps'
-                : filters.capBucket === 'large' ? '>=$10B'
-                : filters.capBucket === 'mid'   ? '$2B-$10B'
-                : '$300M-$2B';
-      meta.textContent = `${cap} · top 50 by composite`;
+      if (filters.starredOnly) {
+        meta.textContent = `★ starred only · ${pinnedSet.size} pinned`;
+      } else {
+        const cap = filters.capBucket === 'all' ? 'all caps'
+                  : filters.capBucket === 'large' ? '>=$10B'
+                  : filters.capBucket === 'mid'   ? '$2B-$10B'
+                  : '$300M-$2B';
+        meta.textContent = `${cap} · top 50 by composite · ${pinnedSet.size} pinned`;
+      }
     }
   }
   document.querySelectorAll('#cap-group button').forEach(b => {
@@ -2135,6 +2268,19 @@ Signal: ${m.insSignal ?? 'neutral'}`;
       renderTopTable();
     });
   });
+  document.querySelectorAll('#starred-group button').forEach(b => {
+    b.addEventListener('click', () => {
+      filters.starredOnly = (b.dataset.starred === '1');
+      localStorage.setItem('rcg.starredOnly', filters.starredOnly ? '1' : '0');
+      syncToolbarUI();
+      renderTopTable();
+    });
+  });
+  // Ad-hoc ticker entry — Enter in input or click + Pin
+  document.getElementById('adhoc-add').addEventListener('click', addAdhocTicker);
+  document.getElementById('adhoc-ticker').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); addAdhocTicker(); }
+  });
   syncToolbarUI();
 
   // ── Correlation heatmap: load once, attach toggle handlers ─────────
@@ -2151,7 +2297,14 @@ Signal: ${m.insSignal ?? 'neutral'}`;
   fetchLeaderboard().then(() => renderLeaderboard());
   setInterval(() => fetchLeaderboard().then(() => renderLeaderboard()), 60 * 60 * 1000);
 
-  refresh();
+  // Load the user-pinned set first so star icons paint correctly on the very
+  // first render, then kick the periodic refresh.
+  loadPinned().then(() => {
+    syncToolbarUI();
+    refresh();
+  });
+  // Re-sync pinned set every 5 min in case another browser tab pinned/unpinned
+  setInterval(() => loadPinned().then(syncToolbarUI), 5 * 60 * 1000);
   setInterval(refresh, REFRESH_MS);
 })();
 </script>

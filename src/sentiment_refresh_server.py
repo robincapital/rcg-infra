@@ -4,13 +4,18 @@ Lightweight API server that triggers Bloomberg price refresh + sentiment rerun.
 Runs on port 8085 on NixOS, called by button on sentiment HTML dashboard.
 
 Endpoints:
-  GET /refresh  → triggers full pipeline (BBG pull via SSH + sentiment rerun)
-  GET /status   → returns last refresh time and current state
+  GET    /refresh                 → trigger full pipeline (BBG pull + sentiment)
+  GET    /status                  → last-refresh time + current state
+  GET    /predictions/<TICKER>    → captured prediction history for one ticker
+  GET    /pinned                  → list of user-pinned ("starred"/ad-hoc) tickers
+  POST   /pinned/<TICKER>         → pin a ticker (immediate effect: watchlist + BBG pull)
+  DELETE /pinned/<TICKER>         → unpin a ticker (next screener cycle drops it)
 """
 
 import subprocess
 import json
 import os
+import re
 import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -23,7 +28,16 @@ VENV_PYTHON = "/home/nixos/venv-sentiment/bin/python"
 FINNHUB_KEY = "d6ivnd1r01qleu95pan0d6ivnd1r01qleu95pang"
 STATUS_FILE = Path("/home/nixos/Prod/V1/src/refresh_status.json")
 
-# Track state
+# ─── User-pinned ticker store ──────────────────────────────────────────────
+# Tickers in this file persist across screener regenerations and are always
+# force-included in the BBG pull. Same mechanism powers both the dashboard's
+# ★ favorites button and the ad-hoc ticker entry — any ticker in here gets
+# the full analytics pipeline treatment.
+PINNED_PATH = Path("/home/nixos/Prod/V1/src/user_pinned.json")
+WATCHLIST_PATH = Path("/home/nixos/Prod/V1/outputs/watchlist.json")
+WATCHLIST_SCP_DEST = "ndiaz@rcg-base:C:/Users/ndiaz/Dropbox/RCG_2020/watchlist.json"
+TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")  # stocks/ETFs, allow .B / -A
+
 state = {
     "status": "idle",
     "last_refresh": None,
@@ -32,8 +46,73 @@ state = {
 }
 
 
+# ─── Pin store helpers ─────────────────────────────────────────────────────
+_pin_lock = threading.Lock()
+
+
+def load_pinned() -> list[str]:
+    if not PINNED_PATH.exists():
+        return []
+    try:
+        d = json.loads(PINNED_PATH.read_text())
+        return [t.upper() for t in (d.get("pinned") or []) if isinstance(t, str)]
+    except Exception:
+        return []
+
+
+def save_pinned(pinned: list[str]) -> None:
+    payload = {
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "pinned":     sorted(set(pinned)),
+    }
+    PINNED_PATH.write_text(json.dumps(payload, indent=2))
+
+
+def update_watchlist_and_push(force_include: list[str]) -> tuple[bool, str]:
+    """
+    Append `force_include` tickers to outputs/watchlist.json (deduped, never
+    cropped by the 120 cap), then SCP the file to Windows so the next BBG pull
+    sees them. Returns (ok, message).
+    """
+    if not WATCHLIST_PATH.exists():
+        return False, f"watchlist file missing: {WATCHLIST_PATH}"
+    try:
+        wl = json.loads(WATCHLIST_PATH.read_text())
+        tickers = list(wl.get("tickers") or [])
+        added = []
+        for t in force_include:
+            if t not in tickers:
+                tickers.append(t)
+                added.append(t)
+        wl["tickers"] = tickers
+        notes = wl.get("notes") or {}
+        for t in force_include:
+            if t not in notes:
+                notes[t] = "user-pinned"
+        wl["notes"] = notes
+        wl["generated_at"] = datetime.now(timezone.utc).isoformat()
+        WATCHLIST_PATH.write_text(json.dumps(wl, indent=2, default=str))
+    except Exception as e:
+        return False, f"watchlist update failed: {e}"
+
+    # SCP to Windows so the next BBG pull picks it up
+    try:
+        result = subprocess.run(
+            ["scp", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes",
+             "-o", "StrictHostKeyChecking=accept-new",
+             str(WATCHLIST_PATH), WATCHLIST_SCP_DEST],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            return False, f"scp failed: {result.stderr.strip()[:200]}"
+    except Exception as e:
+        return False, f"scp exception: {e}"
+
+    return True, f"watchlist updated · added={added or '[already present]'}"
+
+
+# ─── Refresh runner ────────────────────────────────────────────────────────
 def run_refresh():
-    """Execute the full refresh pipeline in a background thread."""
     global state
     if state["running"]:
         return
@@ -42,13 +121,9 @@ def run_refresh():
     state["status"] = "refreshing"
 
     try:
-        # Step 1: Trigger Bloomberg pull on Windows via SSH
-        # The Windows machine runs bloomberg_prices.py which SCPs the result back
         state["status"] = "pulling bloomberg prices..."
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Triggering Bloomberg refresh...")
 
-        # Try SSH to Windows to run the Bloomberg script
-        # If this fails, the Bloomberg prices may still be fresh from the scheduled task
         try:
             result = subprocess.run(
                 ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
@@ -60,11 +135,9 @@ def run_refresh():
                 print(f"  Bloomberg pull OK")
             else:
                 print(f"  Bloomberg pull failed (may not be reachable): {result.stderr[:100]}")
-                # Continue anyway — use whatever prices we have
         except Exception as e:
             print(f"  Bloomberg SSH failed: {e} — using existing prices")
 
-        # Step 2: Run sentiment script
         state["status"] = "running sentiment analysis..."
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Running sentiment analysis...")
 
@@ -97,7 +170,6 @@ def run_refresh():
     finally:
         state["running"] = False
 
-    # Write status to file
     try:
         with open(STATUS_FILE, "w") as f:
             json.dump(state, f)
@@ -105,46 +177,48 @@ def run_refresh():
         pass
 
 
-class RefreshHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        # CORS headers for cross-origin requests from the dashboard
-        headers = {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET",
-            "Content-Type": "application/json",
-        }
+# ─── HTTP handler ──────────────────────────────────────────────────────────
+CORS = {
+    "Access-Control-Allow-Origin":  "*",
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Content-Type":                 "application/json",
+}
 
+
+class RefreshHandler(BaseHTTPRequestHandler):
+    def _send_json(self, code: int, body: dict):
+        self.send_response(code)
+        for k, v in CORS.items():
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(json.dumps(body, default=str).encode())
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        for k, v in CORS.items():
+            self.send_header(k, v)
+        self.end_headers()
+
+    # ─── GET ────────────────────────────────────────────────────────
+    def do_GET(self):
         if self.path == "/refresh":
             if state["running"]:
-                response = {"message": "Refresh already in progress", "state": state}
-                self.send_response(200)
+                self._send_json(200, {"message": "Refresh already in progress", "state": state})
             else:
-                # Launch refresh in background thread
-                thread = threading.Thread(target=run_refresh, daemon=True)
-                thread.start()
-                response = {"message": "Refresh started", "state": state}
-                self.send_response(202)
+                threading.Thread(target=run_refresh, daemon=True).start()
+                self._send_json(202, {"message": "Refresh started", "state": state})
+            return
 
-            for k, v in headers.items():
-                self.send_header(k, v)
-            self.end_headers()
-            self.wfile.write(json.dumps(response).encode())
+        if self.path == "/status":
+            self._send_json(200, {"state": state})
+            return
 
-        elif self.path == "/status":
-            response = {"state": state}
-            self.send_response(200)
-            for k, v in headers.items():
-                self.send_header(k, v)
-            self.end_headers()
-            self.wfile.write(json.dumps(response).encode())
+        if self.path == "/pinned":
+            self._send_json(200, {"pinned": load_pinned()})
+            return
 
-        elif self.path.startswith("/predictions/"):
-            # GET /predictions/<TICKER>?hours=24
-            #
-            # Returns the captured live_prediction history for a single ticker
-            # over the last N hours, pivoted into one row per snapshot with all
-            # captured signal columns. Powers the per-ticker time-series chart
-            # in the dashboard's expanded detail row.
+        if self.path.startswith("/predictions/"):
             try:
                 from urllib.parse import urlparse, parse_qs
                 import psycopg
@@ -152,10 +226,8 @@ class RefreshHandler(BaseHTTPRequestHandler):
                 ticker = parsed.path.split("/")[-1].upper()
                 qs = parse_qs(parsed.query)
                 hours = int(qs.get("hours", ["24"])[0])
-                hours = max(1, min(hours, 24 * 14))   # clamp 1h–14d
+                hours = max(1, min(hours, 24 * 14))
 
-                # Query all signals for this ticker over the window, joined to
-                # runs so we can pivot by run_id (each fire = one snapshot row).
                 with psycopg.connect(
                     "host=/run/postgresql user=nixos dbname=rcg_signals"
                 ) as conn:
@@ -175,45 +247,96 @@ class RefreshHandler(BaseHTTPRequestHandler):
                         )
                         rows = cur.fetchall()
 
-                # Pivot: one record per run_id (each fire = one snapshot)
                 by_run = {}
                 for run_id, run_ts, name, val, sval in rows:
                     rec = by_run.setdefault(run_id, {"run_id": run_id, "ts": run_ts.isoformat()})
                     rec[name] = val if val is not None else sval
 
-                # Sort chronologically and emit
                 snapshots = sorted(by_run.values(), key=lambda r: r["ts"])
-                response = {
-                    "ticker": ticker,
-                    "hours":  hours,
-                    "rows":   snapshots,
-                }
-                self.send_response(200)
-                for k, v in headers.items():
-                    self.send_header(k, v)
-                self.end_headers()
-                self.wfile.write(json.dumps(response, default=str).encode())
+                self._send_json(200, {"ticker": ticker, "hours": hours, "rows": snapshots})
             except Exception as e:
-                self.send_response(500)
-                for k, v in headers.items():
-                    self.send_header(k, v)
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": str(e)}).encode())
+                self._send_json(500, {"error": str(e)})
+            return
 
-        else:
-            self.send_response(404)
-            self.end_headers()
+        self.send_response(404)
+        for k, v in CORS.items(): self.send_header(k, v)
+        self.end_headers()
+
+    # ─── POST ───────────────────────────────────────────────────────
+    def do_POST(self):
+        if self.path.startswith("/pinned/"):
+            ticker = self.path.split("/")[-1].upper().strip()
+            if not TICKER_RE.match(ticker):
+                self._send_json(400, {"error": f"invalid ticker: {ticker!r}"})
+                return
+
+            with _pin_lock:
+                pinned = load_pinned()
+                if ticker not in pinned:
+                    pinned.append(ticker)
+                    save_pinned(pinned)
+                    newly_pinned = True
+                else:
+                    newly_pinned = False
+
+            ok, msg = update_watchlist_and_push([ticker])
+            print(f"[pin] +{ticker} (newly={newly_pinned}) · {msg}")
+
+            # Trigger BBG pull + sentiment in background so the new ticker
+            # gets data immediately. Don't block the HTTP response.
+            if not state["running"]:
+                threading.Thread(target=run_refresh, daemon=True).start()
+
+            self._send_json(
+                202,
+                {
+                    "ticker":         ticker,
+                    "newly_pinned":   newly_pinned,
+                    "pinned":         load_pinned(),
+                    "watchlist_push": msg,
+                    "refresh_kicked": not state["running"],
+                },
+            )
+            return
+
+        self.send_response(404)
+        for k, v in CORS.items(): self.send_header(k, v)
+        self.end_headers()
+
+    # ─── DELETE ─────────────────────────────────────────────────────
+    def do_DELETE(self):
+        if self.path.startswith("/pinned/"):
+            ticker = self.path.split("/")[-1].upper().strip()
+            with _pin_lock:
+                pinned = load_pinned()
+                if ticker in pinned:
+                    pinned.remove(ticker)
+                    save_pinned(pinned)
+                    removed = True
+                else:
+                    removed = False
+
+            print(f"[pin] -{ticker} (removed={removed})")
+            self._send_json(200, {"ticker": ticker, "removed": removed,
+                                  "pinned": load_pinned()})
+            return
+
+        self.send_response(404)
+        for k, v in CORS.items(): self.send_header(k, v)
+        self.end_headers()
 
     def log_message(self, format, *args):
-        # Quiet logging
         pass
 
 
 def main():
     server = HTTPServer(("0.0.0.0", PORT), RefreshHandler)
     print(f"Refresh server running on port {PORT}")
-    print(f"  GET http://rcg-nixos:{PORT}/refresh  → trigger refresh")
-    print(f"  GET http://rcg-nixos:{PORT}/status   → check status")
+    print(f"  GET    http://rcg-nixos:{PORT}/refresh           → trigger refresh")
+    print(f"  GET    http://rcg-nixos:{PORT}/status            → check status")
+    print(f"  GET    http://rcg-nixos:{PORT}/pinned            → list pinned tickers")
+    print(f"  POST   http://rcg-nixos:{PORT}/pinned/<TICKER>   → pin (force into BBG pull)")
+    print(f"  DELETE http://rcg-nixos:{PORT}/pinned/<TICKER>   → unpin")
     server.serve_forever()
 
 
