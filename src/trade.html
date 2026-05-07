@@ -213,6 +213,15 @@
   .insider-row .amt.sell { color: var(--red); }
   .insider-row .dt { color: var(--dim); font-size: 9px; }
 
+  /* ─── Top Movers section dividers (5 gainers / 5 losers split) ─── */
+  tr.movers-section td { background: var(--panel2); color: var(--gold);
+                         font-size: 9px; text-transform: uppercase; letter-spacing: 1px;
+                         padding: 4px 8px; border-top: 1px solid var(--border);
+                         text-align: left; cursor: default; }
+  tr.movers-section td:hover { background: var(--panel2); }
+  tr.movers-section.gainers td { color: var(--green); }
+  tr.movers-section.losers  td { color: var(--red); }
+
   /* ─── Filter toolbar (mkt cap, user bias, fed rates) ─── */
   .toolbar { display: flex; gap: 0.7rem; align-items: center; flex-wrap: wrap;
              background: var(--panel2); padding: 0.4rem 1rem; border-bottom: 1px solid var(--border);
@@ -1118,34 +1127,56 @@
 
   // ── Render ────────────────────────────────────────────────────
   let lastRows = [];
+  function moversRowHtml(m) {
+    const pulse = m.newsCnt >= 5 ? '<span class="news-pulse-dot hot" title="' + m.newsCnt + ' articles in 24h"></span>'
+                : m.newsCnt >= 2 ? '<span class="news-pulse-dot warm" title="' + m.newsCnt + ' articles in 24h"></span>'
+                : '';
+    return `
+      <tr>
+        <td class="tkr">${m.ticker}${pulse}</td>
+        <td>${fmtPx(m.livePx)}</td>
+        <td class="neutral">${fmtPx(m.eod)}</td>
+        <td class="${moveClass(m.move)}">${fmtPct(m.move)}</td>
+        <td>${m.rsi == null ? '—' : m.rsi.toFixed(0)}</td>
+        <td>${fmtVol(m.volNow)}</td>
+      </tr>`;
+  }
   function renderMoversTable() {
     const tbody = document.querySelector('#movers-tbl tbody');
-    let rows = lastRows.filter(r => r.move != null);
-    const st = sortState.movers;
-    if (st.col === 'move' && st.dir === -1) {
-      // Default: sort by ABS move desc
-      rows = rows.sort((a,b) => Math.abs(b.move ?? 0) - Math.abs(a.move ?? 0));
-    } else {
-      rows = rows.sort(makeSorter(st));
+    const all = lastRows.filter(r => r.move != null);
+    if (!all.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty">no overlap with watchlist yet</td></tr>';
+      document.getElementById('movers-meta').textContent = '—';
+      return;
     }
-    tbody.innerHTML = rows.length === 0
-      ? '<tr><td colspan="6" class="empty">no overlap with watchlist yet</td></tr>'
-      : rows.map(m => {
-          const pulse = m.newsCnt >= 5 ? '<span class="news-pulse-dot hot" title="' + m.newsCnt + ' articles in 24h"></span>'
-                      : m.newsCnt >= 2 ? '<span class="news-pulse-dot warm" title="' + m.newsCnt + ' articles in 24h"></span>'
-                      : '';
-          return `
-        <tr>
-          <td class="tkr">${m.ticker}${pulse}</td>
-          <td>${fmtPx(m.livePx)}</td>
-          <td class="neutral">${fmtPx(m.eod)}</td>
-          <td class="${moveClass(m.move)}">${fmtPct(m.move)}</td>
-          <td>${m.rsi == null ? '—' : m.rsi.toFixed(0)}</td>
-          <td>${fmtVol(m.volNow)}</td>
-        </tr>
-      `;}).join('');
-    document.getElementById('movers-meta').textContent =
-      `${rows.length} of ${lastRows.length} watchlist tickers`;
+    const st = sortState.movers;
+    const isDefault = (st.col === 'move' && st.dir === -1);
+
+    if (isDefault) {
+      // Split mode: top 5 gainers (move > 0 desc) + top 5 losers (move < 0 asc)
+      const gainers = all.filter(r => r.move > 0)
+                        .sort((a, b) => b.move - a.move)
+                        .slice(0, 5);
+      const losers  = all.filter(r => r.move < 0)
+                        .sort((a, b) => a.move - b.move)
+                        .slice(0, 5);
+      const html = [];
+      html.push(`<tr class="movers-section gainers"><td colspan="6">▲ Top 5 Gainers</td></tr>`);
+      html.push(gainers.length ? gainers.map(moversRowHtml).join('') :
+                '<tr><td colspan="6" class="empty">no gainers</td></tr>');
+      html.push(`<tr class="movers-section losers"><td colspan="6">▼ Top 5 Losers</td></tr>`);
+      html.push(losers.length ? losers.map(moversRowHtml).join('') :
+                '<tr><td colspan="6" class="empty">no losers</td></tr>');
+      tbody.innerHTML = html.join('');
+      document.getElementById('movers-meta').textContent =
+        `${gainers.length}↑ · ${losers.length}↓ · ${all.length} watchlist tickers (click any column to flat-sort)`;
+    } else {
+      // Sorted mode: simple top-10 by user's chosen sort
+      const rows = all.sort(makeSorter(st)).slice(0, 10);
+      tbody.innerHTML = rows.map(moversRowHtml).join('');
+      document.getElementById('movers-meta').textContent =
+        `top 10 by ${st.col} (${st.dir === 1 ? 'asc' : 'desc'}) · ${all.length} eligible`;
+    }
   }
   function renderTopTable() {
     const tbody = document.querySelector('#top-tbl tbody');
@@ -1448,6 +1479,7 @@
       lastRows = enriched;
       renderMoversTable();
       renderTopTable();
+      updateFedRateDisplay();
     } catch (e) {
       console.error(e);
       document.getElementById('age').textContent = 'fetch failed: ' + e.message;
@@ -1475,6 +1507,40 @@
   });
 
   // ─── Filter toolbar wiring ────────────────────────────────
+  // Detect fed rates from any ticker's pt_detail_json (the screener embeds them
+  // there: fed_rate is the target, rate_spread_bps = (target - neutral) * 1e4).
+  // No script changes needed — we reuse data we're already loading.
+  function detectFedRates() {
+    for (const f of Object.values(lastFundamentals)) {
+      if (!f || !f.pt_detail_json) continue;
+      try {
+        const d = JSON.parse(f.pt_detail_json);
+        const target = d.fed_rate;
+        const spread = d.rate_spread_bps;
+        if (target != null && spread != null) {
+          return { target, neutral: target - spread / 10000, spreadBps: spread };
+        }
+      } catch (_) { /* skip malformed */ }
+    }
+    return null;
+  }
+  function updateFedRateDisplay() {
+    const el = document.getElementById('fed-rate');
+    if (!el) return;
+    const r = detectFedRates();
+    if (!r) {
+      el.textContent = '— / —';
+      el.title = 'Fed rates: not yet loaded';
+      return;
+    }
+    const tgtPct = (r.target  * 100).toFixed(3);
+    const neuPct = (r.neutral * 100).toFixed(2);
+    el.textContent = `${tgtPct}% / ${neuPct}%`;
+    el.title = `Fed target ${tgtPct}% (FFER) · Fed neutral ${neuPct}% (long-run R*)\n` +
+               `Spread ${r.spreadBps}bps drives sector-multiple compression in PT engine.\n` +
+               `Source: pt_detail_json from latest screener run (05:00 ET MF). Read-only for now.`;
+  }
+
   function syncToolbarUI() {
     document.querySelectorAll('#cap-group button').forEach(b => {
       b.classList.toggle('active', b.dataset.cap === filters.capBucket);
