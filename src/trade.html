@@ -982,7 +982,7 @@
     }));
     const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
 
-    // Markers colored by action label
+    // Markers colored by action label, with realized-return attached to tooltip
     const actionColor = (a) => {
       if (a === 'BREAKOUT' || a === 'PRE-BREAKOUT') return 'var(--green-bright)';
       if (a === 'STRONG' || a === 'WATCH')          return 'var(--green)';
@@ -990,11 +990,35 @@
       if (a === 'WEAKENING')                         return 'var(--orange)';
       return 'var(--dim)';
     };
-    const markers = points.map(p =>
-      `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3" fill="${actionColor(p.action)}" stroke="#000" stroke-width="0.5">
-         <title>${new Date(p.ts).toLocaleString()} · signed ${p.v >= 0 ? '+' : ''}${Math.round(p.v)} · ${p.action}</title>
-       </circle>`
-    ).join('');
+    // Outer ring colored by realized 1h forward return when available — shows
+    // at a glance whether the prediction "worked": green ring = positive realized,
+    // red ring = negative realized, none = no realized data yet.
+    const markers = points.map((p, i) => {
+      const r = rows[i] || {};
+      const rz = r.realized_return_60min_pct;
+      let ring = '';
+      if (typeof rz === 'number') {
+        const ringColor = rz > 0.2 ? 'var(--green-bright)' : rz < -0.2 ? 'var(--red-bright)' : 'var(--dim)';
+        ring = `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="6" fill="none" stroke="${ringColor}" stroke-width="1.2" opacity="0.9"/>`;
+      }
+      const tipParts = [
+        new Date(p.ts).toLocaleString(),
+        `signed ${p.v >= 0 ? '+' : ''}${Math.round(p.v)} · ${p.action}`,
+      ];
+      const horizons = [
+        ['30min', r.realized_return_30min_pct],
+        ['60min', r.realized_return_60min_pct],
+        ['4h',    r.realized_return_4h_pct],
+      ];
+      horizons.forEach(([lbl, val]) => {
+        if (typeof val === 'number') {
+          tipParts.push(`realized ${lbl}: ${val >= 0 ? '+' : ''}${val.toFixed(2)}%`);
+        }
+      });
+      return `${ring}<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3" fill="${actionColor(p.action)}" stroke="#000" stroke-width="0.5">
+         <title>${tipParts.join('\n')}</title>
+       </circle>`;
+    }).join('');
 
     // Stats summary
     const scores = rows.map(r => r.pred_signed_score ?? 0);
@@ -1005,6 +1029,29 @@
     rows.forEach(r => { actionCounts[r.pred_action || 'NEUTRAL'] = (actionCounts[r.pred_action || 'NEUTRAL'] || 0) + 1; });
     const actionStr = Object.entries(actionCounts).sort((a, b) => b[1] - a[1])
                        .map(([k, n]) => `${k}:${n}`).join(' · ');
+
+    // ── Model assertiveness footer ──
+    // For each prediction with a realized 60min return, did the prediction's
+    // sign match the realized-return sign? Hit-rate = (correct sign) / (total).
+    // Only meaningful once we have several days of captures, but starts being
+    // useful immediately for tickers with active signals.
+    const horizonStats = ['30min', '60min', '4h'].map(h => {
+      const key = `realized_return_${h}_pct`;
+      const matched = rows
+        .filter(r => typeof r[key] === 'number' && Math.abs(r.pred_signed_score ?? 0) >= 25)
+        .map(r => ({ pred: r.pred_signed_score ?? 0, real: r[key] }));
+      if (matched.length === 0) return { h, n: 0, hits: 0, rate: null, avgSize: null };
+      const hits = matched.filter(m => Math.sign(m.pred) === Math.sign(m.real)).length;
+      const avgSize = matched.reduce((a, m) => a + Math.abs(m.real), 0) / matched.length;
+      // Spearman-lite: just product of signs averaged (a simpler IC proxy)
+      const ic = matched.reduce((a, m) => a + Math.sign(m.pred) * Math.sign(m.real), 0) / matched.length;
+      return { h, n: matched.length, hits, rate: hits / matched.length, avgSize, ic };
+    });
+    const assertHtml = horizonStats.map(s => {
+      if (s.n === 0) return `<span style="color:var(--dim)">${s.h}: n=0</span>`;
+      const rateColor = s.rate >= 0.6 ? 'var(--green)' : s.rate <= 0.4 ? 'var(--red)' : 'var(--dim)';
+      return `<span style="color:${rateColor}" title="signed-pred vs realized-${s.h}: ${s.hits}/${s.n} sign matches · avg |move| ${s.avgSize.toFixed(2)}% · directional IC ${s.ic.toFixed(2)}">${s.h}: ${s.hits}/${s.n} (${(s.rate*100).toFixed(0)}%)</span>`;
+    }).join(' · ');
 
     // Time labels (first, last, mid)
     const fmtT = (ts) => {
@@ -1040,6 +1087,13 @@
           <span>Mean: <b>${meanS >= 0 ? '+' : ''}${meanS.toFixed(1)}</b></span>
           <span>Latest: <b>${(latest.pred_signed_score ?? 0) >= 0 ? '+' : ''}${Math.round(latest.pred_signed_score ?? 0)}</b> · ${latest.pred_action || 'NEUTRAL'}</span>
           <span style="margin-left:auto;color:var(--dim)">${actionStr}</span>
+        </div>
+        <div class="chart-legend-row" style="font-size:10px;border-top:1px dashed var(--border);padding-top:0.3rem">
+          <span style="color:var(--gold)">Assertiveness — sign-match rate (|pred|≥25 only):</span>
+          ${assertHtml}
+          <span style="margin-left:auto;color:var(--dim)" title="Hit-rate is the fraction of strong directional predictions whose realized return at the horizon agreed in sign. Need ~5+ days of data per ticker for a reliable estimate.">
+            (rings on dots: green=realized 60min positive, red=negative)
+          </span>
         </div>
       </div>
     `;
