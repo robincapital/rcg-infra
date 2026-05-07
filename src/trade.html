@@ -213,6 +213,32 @@
   .insider-row .amt.sell { color: var(--red); }
   .insider-row .dt { color: var(--dim); font-size: 9px; }
 
+  /* ─── Filter toolbar (mkt cap, user bias, fed rates) ─── */
+  .toolbar { display: flex; gap: 0.7rem; align-items: center; flex-wrap: wrap;
+             background: var(--panel2); padding: 0.4rem 1rem; border-bottom: 1px solid var(--border);
+             font-size: 11px; }
+  .toolbar .lbl { color: var(--dim); margin-right: 0.2rem; text-transform: uppercase;
+                  font-size: 10px; letter-spacing: 0.5px; }
+  .toolbar .btn-group { display: inline-flex; border: 1px solid var(--border); border-radius: 3px;
+                        overflow: hidden; }
+  .toolbar .btn-group button { background: var(--panel); color: var(--dim); border: none;
+                               padding: 5px 11px; cursor: pointer; font-size: 11px; font-family: monospace;
+                               border-right: 1px solid var(--border); }
+  .toolbar .btn-group button:last-child { border-right: none; }
+  .toolbar .btn-group button:hover { color: var(--text); background: var(--bg); }
+  .toolbar .btn-group button.active { background: var(--gold); color: #0d0d0d; font-weight: bold; }
+  .toolbar .btn-group button.bear.active { background: var(--inf-5); color: #fff; }
+  .toolbar .btn-group button.bull.active { background: var(--green); color: #0d0d0d; }
+  .toolbar .separator { color: var(--border); padding: 0 0.2rem; }
+  .toolbar .fed-rate { color: var(--gold2); font-family: monospace; font-size: 11px; cursor: help;
+                       padding: 4px 8px; border: 1px dashed var(--border); border-radius: 3px; }
+  .toolbar .meta-info { color: var(--dim); font-family: monospace; font-size: 10px;
+                        margin-left: auto; }
+  .bias-indicator { display: inline-block; padding: 1px 7px; border-radius: 3px; margin-left: 4px;
+                    font-size: 10px; font-weight: bold; font-family: monospace; }
+  .bias-indicator.bull { background: var(--green); color: #0d0d0d; }
+  .bias-indicator.bear { background: var(--inf-5); color: #fff; }
+
   .levels-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
                   gap: 4px; padding: 0.4rem 0; }
   .lvl-card { background: var(--panel); padding: 4px 8px; border-radius: 3px; border: 1px solid var(--border);
@@ -268,7 +294,7 @@
 
 <div class="header">
   <div class="header-row">
-    <h1>RCG · LIVE TRADING</h1>
+    <h1>RCG · LIVE TRADING <span id="bias-badge"></span></h1>
     <span class="macro-chip"><span class="lbl">SPY</span><span id="m-spy">—</span> <span id="m-spy-pct"></span></span>
     <span class="macro-chip"><span class="lbl">VIX</span><span id="m-vix">—</span> <span id="m-vix-pct"></span></span>
     <span class="macro-chip"><span class="lbl">TLT</span><span id="m-tlt">—</span> <span id="m-tlt-pct"></span></span>
@@ -279,6 +305,28 @@
     <a class="nav-link" href="market_sentiment_bbg.html">Macro / Sentiment →</a>
     <button class="refresh-btn" id="refresh-btn">Force pull</button>
   </div>
+</div>
+
+<div class="toolbar">
+  <span class="lbl">Mkt cap:</span>
+  <div class="btn-group" id="cap-group">
+    <button data-cap="all">All</button>
+    <button data-cap="large">Large</button>
+    <button data-cap="mid">Mid</button>
+    <button data-cap="small">Small</button>
+  </div>
+  <span class="separator">·</span>
+  <span class="lbl">User bias:</span>
+  <div class="btn-group" id="bias-group">
+    <button data-bias="-1" class="bear">Bear</button>
+    <button data-bias="0">Neutral</button>
+    <button data-bias="1" class="bull">Bull</button>
+  </div>
+  <span class="separator">·</span>
+  <span class="lbl">Fed:</span>
+  <span class="fed-rate" id="fed-rate"
+        title="Fed target rate / neutral rate used by today's price targets. Server-side editable in next update.">3.625% / 3.00%</span>
+  <span class="meta-info" id="filter-meta">—</span>
 </div>
 
 <div class="container">
@@ -353,8 +401,29 @@
   const REFRESH_MS = 60 * 1000;
   const PRICES_URL = '/bloomberg_prices.json';
   const SCREENER_CSV_URL = '/long_screener_results.csv';
+  const UNIVERSE_CSV_URL = '/screener_universe.csv';
   const FACTORS_URL = '/factor_signals_bbg.json';
   const FINNHUB_URL = '/finnhub_signals.json';
+  const UNIVERSE_TTL_MS = 30 * 60 * 1000;   // refresh universe at most every 30 min
+
+  // ─── User filter state (persisted in localStorage) ───
+  const filters = {
+    capBucket: localStorage.getItem('rcg.capBucket') || 'all',  // all | large | mid | small
+    userBias:  parseFloat(localStorage.getItem('rcg.userBias') || '0'),  // -1 | 0 | +1
+  };
+  const BIAS_OFFSET_MAGNITUDE = 25;  // points added/subtracted from signedScore display
+
+  function biasOffset() {
+    return filters.userBias * BIAS_OFFSET_MAGNITUDE;
+  }
+  function capBucketTest(mktcap) {
+    if (filters.capBucket === 'all') return true;
+    if (mktcap == null) return false;
+    if (filters.capBucket === 'large') return mktcap >= 10e9;
+    if (filters.capBucket === 'mid')   return mktcap >= 2e9 && mktcap < 10e9;
+    if (filters.capBucket === 'small') return mktcap >= 300e6 && mktcap < 2e9;
+    return true;
+  }
 
   // ─────────────────────────────────────────────────────────────
   // CSV parser (RFC-4180-ish: respects double-quoted cells with
@@ -1080,10 +1149,29 @@
   }
   function renderTopTable() {
     const tbody = document.querySelector('#top-tbl tbody');
+    // 1. Need fundamental composite to rank
     let rows = lastRows.filter(r => r.composite != null);
+    // 2. Mkt-cap bucket filter
+    rows = rows.filter(r => capBucketTest(r.mktcap));
+    // 3. User-bias additive offset on signedScore (recompute action label)
+    const offset = biasOffset();
+    if (offset !== 0) {
+      rows = rows.map(r => {
+        const adjusted = (r.signedScore || 0) + offset;
+        return { ...r,
+                 signedScoreRaw: r.signedScore,
+                 signedScore:    Math.max(-100, Math.min(100, adjusted)),
+                 action:         actionLabel(adjusted, r.composite, r.move),
+                 actionRank:     actionLabel(adjusted, r.composite, r.move).rank };
+      });
+    }
+    // 4. Top-N by composite within the filtered subset
+    rows = rows.sort((a, b) => (b.composite ?? 0) - (a.composite ?? 0)).slice(0, 50);
+    // 5. Action-label filter (toggled via legend badge clicks)
     if (actionFilter) {
       rows = rows.filter(r => r.action?.l === actionFilter);
     }
+    // 6. User column sort
     rows = rows.sort(makeSorter(sortState.top));
     if (rows.length === 0) {
       tbody.innerHTML = '<tr><td colspan="17" class="empty">no fundamental + BBG overlap yet</td></tr>';
@@ -1169,12 +1257,22 @@
   }
 
   // ── Fetchers ──────────────────────────────────────────────────
-  let lastFundamentals = {};
-  async function fetchFundamentals() {
+  // Universe CSV is the canonical fundamentals source — 831 names, all sectors,
+  // every cap bucket. Cached for UNIVERSE_TTL_MS to avoid 1MB fetches on each
+  // 60-second tick (BBG/Finnhub still refresh per tick).
+  let lastFundamentals  = {};
+  let universeFetchedAt = 0;
+  async function fetchFundamentals(force = false) {
+    const now = Date.now();
+    if (!force && (now - universeFetchedAt < UNIVERSE_TTL_MS) && Object.keys(lastFundamentals).length) {
+      return lastFundamentals;
+    }
     try {
-      const r = await fetch(SCREENER_CSV_URL + '?_=' + Date.now(), { cache: 'no-cache' });
-      if (!r.ok) throw new Error('csv ' + r.status);
+      const r = await fetch(UNIVERSE_CSV_URL + '?_=' + now, { cache: 'no-cache' });
+      if (!r.ok) throw new Error('universe ' + r.status);
       const rows = parseCsv(await r.text());
+      // Sort by composite_score desc to assign rank
+      rows.sort((a, b) => (parseFloat(b.composite_score) || 0) - (parseFloat(a.composite_score) || 0));
       const map = {};
       rows.forEach((rw, idx) => {
         if (!rw.ticker) return;
@@ -1191,10 +1289,12 @@
           rank:            idx + 1,
         };
       });
-      lastFundamentals = map;
+      lastFundamentals  = map;
+      universeFetchedAt = now;
+      console.log('[fetchFundamentals] universe loaded:', Object.keys(map).length, 'tickers');
       return map;
     } catch (e) {
-      console.error('fundamentals fetch failed', e);
+      console.error('universe fetch failed', e);
       return lastFundamentals;
     }
   }
@@ -1288,16 +1388,26 @@
 
       const watchlist = bbg.watchlist || {};
       const enriched = [];
-      Object.entries(watchlist).forEach(([t, w]) => {
-        if (!w || w.error) return;
-        const fund   = fundamentals[t] || null;
-        const livePx = w.price;
+      // Build a unified ticker set: every name in the BBG watchlist (has live data)
+      // plus every name in the fundamentals universe (so cap filters can surface
+      // names beyond what we're pulling live).
+      const allTickers = new Set([...Object.keys(watchlist), ...Object.keys(fundamentals)]);
+      // Skip macros from the table — they live in header chips
+      ['SPY', 'VIX', 'TLT'].forEach(t => allTickers.delete(t));
+      allTickers.forEach((t) => {
+        const w = watchlist[t] || null;
+        if (w && w.error) return;
+        const fund = fundamentals[t] || null;
+        const bars = w?.bars || [];
+        const livePx = w?.price ?? null;
         const eod    = fund?.last_price ?? null;
         const move   = (livePx != null && eod) ? (livePx - eod) / eod : null;
-        const pred   = predictiveComposite(w.bars || []);
-        const rsi    = intradayRsi(w.bars || []);
-        const volNow = todayVolume(w.bars || []);
-        const adv    = avgDailyVolume(w.bars || []);
+        const pred   = bars.length ? predictiveComposite(bars)
+                                   : { score: 0, signedScore: 0, signalDirs: [0,0,0,0,0],
+                                       surge: null, udv: null, accel: null, vwap: null, range: null };
+        const rsi    = bars.length ? intradayRsi(bars) : null;
+        const volNow = bars.length ? todayVolume(bars) : null;
+        const adv    = bars.length ? avgDailyVolume(bars) : null;
         const volRatio = (volNow != null && adv) ? volNow / adv : null;
         const action  = actionLabel(pred.signedScore, fund?.composite_score, move);
         const sigCount = (pred.signalDirs || []).filter(d => d !== 0).length;
@@ -1327,7 +1437,7 @@
           targetPx:  fund?.target_price ?? null,
           upsidePct: fund?.upside_pct ?? null,
           fund,
-          bars: w.bars || [],          // for chart + levels
+          bars,                          // for chart + levels (empty array if no BBG)
           fh, newsCnt, newsPol, newsScore,
           recScore, recCurrent: fhRecs?.current ?? null, recDelta: fhRecs?.delta_3m ?? null,
           insSignal: fhIns?.signal ?? null, insNet: fhIns?.net_30d_dollars ?? null,
@@ -1363,6 +1473,48 @@
   document.querySelectorAll('.legend .badge[data-filter]').forEach(b => {
     b.addEventListener('click', () => setActionFilter(b.dataset.filter));
   });
+
+  // ─── Filter toolbar wiring ────────────────────────────────
+  function syncToolbarUI() {
+    document.querySelectorAll('#cap-group button').forEach(b => {
+      b.classList.toggle('active', b.dataset.cap === filters.capBucket);
+    });
+    document.querySelectorAll('#bias-group button').forEach(b => {
+      b.classList.toggle('active', parseFloat(b.dataset.bias) === filters.userBias);
+    });
+    const badge = document.getElementById('bias-badge');
+    if (filters.userBias !== 0) {
+      const isBull = filters.userBias > 0;
+      badge.innerHTML = `<span class="bias-indicator ${isBull ? 'bull' : 'bear'}">${isBull ? '+' : ''}${biasOffset()} ${isBull ? 'BULL' : 'BEAR'} TILT</span>`;
+    } else {
+      badge.innerHTML = '';
+    }
+    const meta = document.getElementById('filter-meta');
+    if (meta) {
+      const cap = filters.capBucket === 'all' ? 'all caps'
+                : filters.capBucket === 'large' ? '>=$10B'
+                : filters.capBucket === 'mid'   ? '$2B-$10B'
+                : '$300M-$2B';
+      meta.textContent = `${cap} · top 50 by composite`;
+    }
+  }
+  document.querySelectorAll('#cap-group button').forEach(b => {
+    b.addEventListener('click', () => {
+      filters.capBucket = b.dataset.cap;
+      localStorage.setItem('rcg.capBucket', filters.capBucket);
+      syncToolbarUI();
+      renderTopTable();
+    });
+  });
+  document.querySelectorAll('#bias-group button').forEach(b => {
+    b.addEventListener('click', () => {
+      filters.userBias = parseFloat(b.dataset.bias);
+      localStorage.setItem('rcg.userBias', String(filters.userBias));
+      syncToolbarUI();
+      renderTopTable();
+    });
+  });
+  syncToolbarUI();
 
   refresh();
   setInterval(refresh, REFRESH_MS);
