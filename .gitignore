@@ -52,3 +52,7 @@ src/CONTEXT_signal_capture.md
 
 # editor/swap backups
 *.bak
+
+# runtime state from finnhub_signals.py
+src/finnhub_signals.json
+src/.finnhub_cache.json
