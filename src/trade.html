@@ -52,7 +52,16 @@
   button.refresh-btn:hover { background: var(--gold2); }
   button.refresh-btn:disabled { background: #444; cursor: wait; }
 
-  .container { display: grid; grid-template-columns: minmax(420px, 1fr) 2.4fr; gap: 1rem; padding: 1rem; align-items: start; }
+  .container { display: grid; grid-template-columns: minmax(420px, 1fr) 2.4fr;
+               grid-template-rows: auto auto;
+               gap: 1rem; padding: 1rem; align-items: start; }
+  .panel-movers       { grid-column: 1; grid-row: 1; }
+  .panel-correlations { grid-column: 1; grid-row: 2; }
+  .panel-top          { grid-column: 2; grid-row: 1 / span 2; }
+  @media (max-width: 900px) {
+    .container { grid-template-columns: 1fr; grid-template-rows: none; }
+    .panel-movers, .panel-correlations, .panel-top { grid-column: 1; grid-row: auto; }
+  }
   .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
            display: flex; flex-direction: column; max-height: calc(100vh - 110px); }
   .panel h2 { margin: 0; padding: 0.6rem 1rem; border-bottom: 1px solid var(--border);
@@ -249,6 +258,40 @@
   .bias-indicator.bull { background: var(--green); color: #0d0d0d; }
   .bias-indicator.bear { background: var(--inf-5); color: #fff; }
 
+  /* ─── Correlation heatmap ─── */
+  .corr-controls { display: flex; gap: 0.4rem; padding: 0.4rem 1rem;
+                   border-bottom: 1px solid var(--border); align-items: center;
+                   font-size: 11px; flex-shrink: 0; }
+  .corr-controls .lbl { color: var(--dim); margin-right: 0.3rem; font-size: 10px;
+                        text-transform: uppercase; letter-spacing: 0.5px; }
+  .corr-controls button { background: var(--panel); color: var(--dim);
+                          border: 1px solid var(--border); border-radius: 3px;
+                          padding: 3px 9px; cursor: pointer; font-family: monospace;
+                          font-size: 11px; }
+  .corr-controls button:hover { color: var(--text); border-color: var(--gold); }
+  .corr-controls button.active { background: var(--gold); color: #0d0d0d;
+                                  border-color: var(--gold); font-weight: bold; }
+  .corr-controls .meta { margin-left: auto; color: var(--dim); font-size: 10px; }
+  .heatmap-wrap { padding: 0.4rem; overflow: auto; }
+  .heatmap { border-collapse: collapse; font-family: monospace; font-size: 9px; }
+  .heatmap th, .heatmap td { padding: 0; text-align: center; border: none; }
+  .heatmap th { background: transparent; color: var(--dim); position: static;
+                cursor: default; font-weight: normal; border-bottom: none; }
+  .heatmap th.col-label { width: 26px; height: 56px; vertical-align: bottom;
+                          padding-bottom: 2px; }
+  .heatmap th.col-label span { display: inline-block; transform: rotate(-60deg);
+                               transform-origin: bottom left; white-space: nowrap;
+                               position: relative; left: 12px; top: -6px;
+                               font-size: 9px; }
+  .heatmap th.row-label { width: 38px; height: 26px; text-align: right;
+                          padding-right: 5px; vertical-align: middle; }
+  .heatmap td.cell { width: 26px; height: 26px; cursor: help;
+                     color: #000; font-weight: 600; font-size: 9px;
+                     border: 1px solid #000; }
+  .heatmap td.cell.empty { background: var(--panel2); cursor: default; }
+  .heatmap td.cell.diag  { background: var(--panel2); color: var(--dim);
+                            border-color: var(--border); }
+
   .levels-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
                   gap: 4px; padding: 0.4rem 0; }
   .lvl-card { background: var(--panel); padding: 4px 8px; border-radius: 3px; border: 1px solid var(--border);
@@ -340,7 +383,7 @@
 </div>
 
 <div class="container">
-  <div class="panel">
+  <div class="panel panel-movers">
     <h2>Top Movers (intraday)</h2>
     <div class="legend">Click a column header to sort. All watchlist tickers with EOD close shown.</div>
     <div class="table-wrap">
@@ -361,7 +404,22 @@
     <div class="meta" id="movers-meta">—</div>
   </div>
 
-  <div class="panel">
+  <div class="panel panel-correlations">
+    <h2>Cross-Asset Rolling Correlation</h2>
+    <div class="corr-controls">
+      <span class="lbl">Window:</span>
+      <button data-corr-win="30d" class="active">30d</button>
+      <button data-corr-win="90d">90d</button>
+      <button data-corr-win="1y">1y</button>
+      <button data-corr-win="delta" title="30d minus 1y — surfaces names whose recent correlation has shifted away from baseline (regime change indicator)">Δ 30d−1y</button>
+      <span class="meta" id="corr-meta">loading…</span>
+    </div>
+    <div class="heatmap-wrap" id="heatmap-wrap">
+      <div class="empty loading">loading correlation matrix…</div>
+    </div>
+  </div>
+
+  <div class="panel panel-top">
     <h2>Top 40 — Fundamental + Predictive Action</h2>
     <div class="legend">
       Click ticker for chart + PT breakdown · click a badge to filter · <strong>Pred is signed</strong>: + bull, − bear<br>
@@ -931,6 +989,109 @@
     `;
   }
 
+  // ── Cross-asset correlation heatmap ──────────────────────────────
+  const CORRELATIONS_URL = '/correlations.json';
+  let correlationsData = null;
+  let correlationsWindow = localStorage.getItem('rcg.corrWindow') || '30d';
+
+  async function fetchCorrelations() {
+    try {
+      const r = await fetch(CORRELATIONS_URL + '?_=' + Date.now(), { cache: 'no-cache' });
+      if (!r.ok) throw new Error('correlations ' + r.status);
+      correlationsData = await r.json();
+      return correlationsData;
+    } catch (e) {
+      console.error('correlations fetch failed', e);
+      return null;
+    }
+  }
+
+  // Color scale: -1 = strong red, 0 = grey, +1 = strong green
+  function corrColor(v) {
+    if (v == null || !isFinite(v)) return '#1a1a1a';
+    const c = Math.max(-1, Math.min(1, v));
+    if (c >= 0) {
+      // 0 (grey #444) → +1 (green #00c97a)
+      const t = c;
+      const r = Math.round(0x44 + (0x00 - 0x44) * t);
+      const g = Math.round(0x44 + (0xc9 - 0x44) * t);
+      const b = Math.round(0x44 + (0x7a - 0x44) * t);
+      return `rgb(${r},${g},${b})`;
+    } else {
+      // 0 (grey #444) → -1 (red #ff4d4d)
+      const t = -c;
+      const r = Math.round(0x44 + (0xff - 0x44) * t);
+      const g = Math.round(0x44 + (0x4d - 0x44) * t);
+      const b = Math.round(0x44 + (0x4d - 0x44) * t);
+      return `rgb(${r},${g},${b})`;
+    }
+  }
+
+  function renderCorrelationHeatmap() {
+    const wrap = document.getElementById('heatmap-wrap');
+    if (!correlationsData) {
+      wrap.innerHTML = '<div class="empty">no correlation data — script may not have run yet</div>';
+      return;
+    }
+    const tickers = correlationsData.tickers || [];
+    const labels  = correlationsData.labels  || {};
+    const windows = correlationsData.windows || {};
+
+    // Build matrix for selected window (or delta mode)
+    let matrix, label, n_obs;
+    if (correlationsWindow === 'delta') {
+      const m30 = windows['30d']?.matrix;
+      const m1y = windows['1y']?.matrix;
+      if (!m30 || !m1y) {
+        wrap.innerHTML = '<div class="empty">delta mode needs both 30d and 1y windows</div>';
+        return;
+      }
+      matrix = m30.map((row, i) => row.map((v, j) => v - m1y[i][j]));
+      label = 'Δ 30d − 1y'; n_obs = '—';
+    } else {
+      const w = windows[correlationsWindow];
+      if (!w) {
+        wrap.innerHTML = `<div class="empty">window ${correlationsWindow} not in data</div>`;
+        return;
+      }
+      matrix = w.matrix; label = correlationsWindow; n_obs = w.n_obs;
+    }
+
+    // Build table — upper triangle only (symmetric matrix)
+    const headerCells = ['<th></th>'].concat(tickers.map(t =>
+      `<th class="col-label" title="${labels[t] || t}"><span>${t}</span></th>`
+    )).join('');
+
+    const rows = tickers.map((rt, i) => {
+      const cells = tickers.map((ct, j) => {
+        if (j < i) return '<td class="cell empty"></td>';
+        if (j === i) return `<td class="cell diag" title="${rt} (self)">·</td>`;
+        const v = matrix[i][j];
+        if (v == null || !isFinite(v)) return '<td class="cell empty">—</td>';
+        const txt = v.toFixed(2).replace(/^-?0\./, m => m === '-0.' ? '-.' : '.');
+        const tip = `${rt} ↔ ${ct}\n${labels[rt] || rt} ↔ ${labels[ct] || ct}\nCorr (${label}): ${v >= 0 ? '+' : ''}${v.toFixed(3)}`;
+        return `<td class="cell" style="background:${corrColor(v)}" title="${tip}">${txt}</td>`;
+      }).join('');
+      return `<tr><th class="row-label" title="${labels[rt] || rt}">${rt}</th>${cells}</tr>`;
+    }).join('');
+
+    wrap.innerHTML = `<table class="heatmap"><thead><tr>${headerCells}</tr></thead><tbody>${rows}</tbody></table>`;
+
+    const meta = document.getElementById('corr-meta');
+    if (meta) {
+      meta.textContent = `asof ${correlationsData.asof_date} · ${tickers.length} tickers · ${typeof n_obs === 'number' ? n_obs + ' obs' : n_obs}`;
+    }
+  }
+
+  function setCorrelationsWindow(w) {
+    correlationsWindow = w;
+    localStorage.setItem('rcg.corrWindow', w);
+    document.querySelectorAll('.corr-controls button[data-corr-win]').forEach(b => {
+      b.classList.toggle('active', b.dataset.corrWin === w);
+    });
+    renderCorrelationHeatmap();
+  }
+
   // ── Prediction history chart (time-series from rcg_signals DB) ───
   // Fetched async on ticker expand; renders SVG line of pred_signed_score
   // over time + threshold zones + intraday_move overlay for context.
@@ -1076,10 +1237,24 @@
           <!-- main signedScore line + markers -->
           <path d="${linePath}" fill="none" stroke="var(--inf-2)" stroke-width="1.5"/>
           ${markers}
-          <!-- x-axis labels -->
-          <text x="${PL}"        y="${H - 6}" text-anchor="start"  fill="var(--dim)" font-size="9">${fmtT(rows[0].ts)}</text>
-          <text x="${(PL + W - PR) / 2}" y="${H - 6}" text-anchor="middle" fill="var(--dim)" font-size="9">${rows.length} snapshots over ${data.hours}h</text>
-          <text x="${W - PR}"    y="${H - 6}" text-anchor="end"    fill="var(--dim)" font-size="9">${fmtT(rows[rows.length-1].ts)}</text>
+          <!-- x-axis: time tick labels at every Nth snapshot for granularity -->
+          ${(() => {
+            const n = rows.length;
+            // Show ~5–8 time ticks across the chart depending on density
+            const tickCount = Math.min(8, Math.max(3, Math.floor(n / 3)));
+            const step = Math.max(1, Math.floor((n - 1) / (tickCount - 1)));
+            const idxs = [];
+            for (let i = 0; i < n; i += step) idxs.push(i);
+            if (idxs[idxs.length - 1] !== n - 1) idxs.push(n - 1);
+            const labels = idxs.map(i => {
+              const d = new Date(rows[i].ts);
+              const x = tsToX(rows[i].ts);
+              const t = `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+              return `<line x1="${x.toFixed(1)}" y1="${H - PB}" x2="${x.toFixed(1)}" y2="${(H - PB + 3).toFixed(1)}" stroke="var(--dim)" stroke-width="0.5"/>
+                      <text x="${x.toFixed(1)}" y="${H - 6}" text-anchor="middle" fill="var(--dim)" font-size="8.5">${t}</text>`;
+            }).join('');
+            return labels + `<text x="${W - PR}" y="${PT - 1}" text-anchor="end" fill="var(--dim)" font-size="8.5">${rows.length} snapshots over ${data.hours}h</text>`;
+          })()}
         </svg>
         <div class="chart-legend-row" style="font-size:10px">
           <span>Range: <b style="color:${minS < -25 ? 'var(--red)' : 'var(--text)'}">${minS >= 0 ? '+' : ''}${Math.round(minS)}</b>
@@ -1838,6 +2013,16 @@ Signal: ${m.insSignal ?? 'neutral'}`;
     });
   });
   syncToolbarUI();
+
+  // ── Correlation heatmap: load once, attach toggle handlers ─────────
+  document.querySelectorAll('.corr-controls button[data-corr-win]').forEach(b => {
+    b.addEventListener('click', () => setCorrelationsWindow(b.dataset.corrWin));
+    if (b.dataset.corrWin === correlationsWindow) b.classList.add('active');
+    else b.classList.remove('active');
+  });
+  fetchCorrelations().then(() => renderCorrelationHeatmap());
+  // Refresh every 6h (data only updates daily after Sharadar)
+  setInterval(() => fetchCorrelations().then(() => renderCorrelationHeatmap()), 6 * 3600 * 1000);
 
   refresh();
   setInterval(refresh, REFRESH_MS);

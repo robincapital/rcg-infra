@@ -2514,13 +2514,46 @@ def main(market_cap_preset=None, fed_target_rate=None, fed_neutral_rate=None,
     html_path.write_text(html)
     print(f"  HTML report: {html_path.resolve()}")
 
-    # ── Watchlist auto-update (top-40 + macros) ───────────────────────
+    # ── Watchlist auto-update (top-40 + top-25-per-cap-bucket + macros) ──
     try:
-        macro = ["SPY", "VIX", "TLT"]
-        top_tickers_for_bbg = scored["ticker"].to_list()
-        final_watchlist = list(dict.fromkeys(macro + top_tickers_for_bbg))[:50]
+        # Macros + key cross-asset ETFs for the correlation matrix
+        macro = ["SPY", "VIX", "TLT", "QQQ", "IWM", "GLD", "SLV", "USO",
+                 "DBC", "UUP", "EFA", "EEM", "HYG", "LQD", "XLK", "XLE", "XLF", "XLV"]
+        top_tickers_for_bbg = scored["ticker"].to_list()  # top-40 (final ranked)
 
-        notes = {"SPY": "Macro proxy", "VIX": "Volatility regime", "TLT": "Long-rate regime"}
+        # Pull top-25 per cap bucket from the full universe (so dashboard's
+        # cap-filter shows live data on the names a user might pick)
+        cap_picks = []
+        try:
+            full_scored_sorted = full_scored.sort("composite_score", descending=True)
+            buckets = [
+                ("large", lambda c: c >= 10e9),
+                ("mid",   lambda c: c >= 2e9 and c < 10e9),
+                ("small", lambda c: c >= 300e6 and c < 2e9),
+            ]
+            for label, pred in buckets:
+                bucket_top = (
+                    full_scored_sorted
+                    .filter(pl.col("marketcap").map_elements(pred, return_dtype=pl.Boolean))
+                    ["ticker"].to_list()[:25]
+                )
+                cap_picks.extend(bucket_top)
+        except Exception as _e:
+            print(f"  [WARN] cap-bucket picks failed: {_e} — falling back to top-40 only")
+
+        final_watchlist = list(dict.fromkeys(macro + top_tickers_for_bbg + cap_picks))
+        # Cap at 120 to keep BBG pull reasonable (~30s at hourly cadence)
+        final_watchlist = final_watchlist[:120]
+
+        notes = {
+            "SPY": "Macro proxy", "VIX": "Volatility regime", "TLT": "Long-rate regime",
+            "QQQ": "Nasdaq tech", "IWM": "Russell 2000 small caps",
+            "GLD": "Gold", "SLV": "Silver", "USO": "Oil", "DBC": "Broad commodities",
+            "UUP": "USD index", "EFA": "Developed intl", "EEM": "Emerging mkts",
+            "HYG": "High-yield credit", "LQD": "Investment-grade credit",
+            "XLK": "Tech sector", "XLE": "Energy sector",
+            "XLF": "Financials sector", "XLV": "Healthcare sector",
+        }
         for row in scored.iter_rows(named=True):
             t = row.get("ticker")
             if not t:
