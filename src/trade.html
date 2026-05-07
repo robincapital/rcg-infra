@@ -166,6 +166,53 @@
   .pred-history { padding: 0.3rem 0; color: var(--dim); font-size: 10px; font-style: italic;
                   border-top: 1px dashed var(--border); margin-top: 0.4rem; }
 
+  /* ─── Finnhub indicators (news / rec / insider) ─── */
+  .fh-cell { font-family: monospace; font-size: 11px; white-space: nowrap; cursor: help; }
+  .fh-cell .icon { opacity: 0.85; margin-right: 2px; }
+  .news-pos { color: var(--green); }
+  .news-neg { color: var(--red); }
+  .news-flat { color: var(--dim); }
+  .news-hot { color: var(--inf-2); font-weight: bold; }  /* 5+ articles */
+  .rec-up   { color: var(--green); }
+  .rec-flat { color: var(--dim); }
+  .rec-down { color: var(--red); }
+  .ins-buy     { color: var(--green-bright); font-weight: bold; }
+  .ins-sell    { color: var(--red-bright); font-weight: bold; }
+  .ins-neutral { color: var(--dim); }
+
+  .news-pulse-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+                    margin-left: 4px; vertical-align: middle; }
+  .news-pulse-dot.hot { background: var(--inf-2); box-shadow: 0 0 4px var(--inf-2); }
+  .news-pulse-dot.warm { background: var(--inf-4); }
+
+  /* ─── Catalysts panel (in detail row) ─── */
+  .catalysts { display: grid; grid-template-columns: minmax(260px, 1.3fr) minmax(200px, 1fr) minmax(220px, 1fr);
+               gap: 0.6rem; margin-top: 0.5rem; padding-top: 0.5rem;
+               border-top: 1px solid var(--border); }
+  @media (max-width: 1100px) { .catalysts { grid-template-columns: 1fr; } }
+  .cat-block { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 0.4rem 0.6rem; }
+  .cat-block h4 { margin: 0 0 0.3rem 0; font-size: 10px; color: var(--gold);
+                  text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;
+                  border-bottom: 1px dashed var(--border); padding-bottom: 0.2rem; }
+  .news-list { font-size: 11px; max-height: 160px; overflow-y: auto; }
+  .news-item { padding: 4px 0; border-bottom: 1px dashed rgba(255,255,255,0.04); }
+  .news-item:last-child { border-bottom: none; }
+  .news-item .src { color: var(--dim); font-size: 9px; }
+  .news-item a { color: var(--text); }
+  .news-item.pos a { color: var(--green); }
+  .news-item.neg a { color: var(--red); }
+  .rec-table { font-size: 10px; width: 100%; }
+  .rec-table th, .rec-table td { padding: 2px 4px; text-align: right; cursor: default; position: static; }
+  .rec-table th { background: transparent; color: var(--dim); border: none; font-weight: normal; }
+  .rec-table td { border: none; }
+  .rec-table th:first-child, .rec-table td:first-child { text-align: left; color: var(--dim); }
+  .insider-list { font-size: 10px; max-height: 160px; overflow-y: auto; font-family: monospace; }
+  .insider-row { padding: 2px 0; display: flex; gap: 0.5rem; justify-content: space-between; }
+  .insider-row .nm { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+  .insider-row .amt.buy  { color: var(--green); }
+  .insider-row .amt.sell { color: var(--red); }
+  .insider-row .dt { color: var(--dim); font-size: 9px; }
+
   .levels-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
                   gap: 4px; padding: 0.4rem 0; }
   .lvl-card { background: var(--panel); padding: 4px 8px; border-radius: 3px; border: 1px solid var(--border);
@@ -187,11 +234,13 @@
     .macro-chip { font-size: 11px; padding: 0.15rem 0.5rem; }
     .nav-link { font-size: 11px; padding: 0.15rem 0.3rem; }
     /* Less-critical Top-40 columns hidden on phones */
-    #top-tbl th:nth-child(4),  #top-tbl td:nth-child(4),
-    #top-tbl th:nth-child(5),  #top-tbl td:nth-child(5),
-    #top-tbl th:nth-child(10), #top-tbl td:nth-child(10),
-    #top-tbl th:nth-child(11), #top-tbl td:nth-child(11),
-    #top-tbl th:nth-child(13), #top-tbl td:nth-child(13)
+    #top-tbl th:nth-child(4),  #top-tbl td:nth-child(4),    /* MktCap */
+    #top-tbl th:nth-child(5),  #top-tbl td:nth-child(5),    /* EOD */
+    #top-tbl th:nth-child(10), #top-tbl td:nth-child(10),   /* RSI */
+    #top-tbl th:nth-child(11), #top-tbl td:nth-child(11),   /* V/ADV */
+    #top-tbl th:nth-child(13), #top-tbl td:nth-child(13),   /* Signals */
+    #top-tbl th:nth-child(15), #top-tbl td:nth-child(15),   /* Rec */
+    #top-tbl th:nth-child(16), #top-tbl td:nth-child(16)    /* Ins */
       { display: none; }
     /* Movers panel: drop EOD + Vol columns on phone */
     #movers-tbl th:nth-child(3), #movers-tbl td:nth-child(3),
@@ -285,10 +334,13 @@
             <th data-col="volRatio"  data-type="num">V/ADV</th>
             <th data-col="signedScore" data-type="num">Pred</th>
             <th data-col="signalsScore" data-type="num">Signals</th>
+            <th data-col="newsScore" data-type="num">News</th>
+            <th data-col="recScore"  data-type="num">Rec</th>
+            <th data-col="insScore"  data-type="num">Ins</th>
             <th data-col="actionRank"   data-type="num">Action</th>
           </tr>
         </thead>
-        <tbody><tr><td colspan="14" class="loading empty">loading…</td></tr></tbody>
+        <tbody><tr><td colspan="17" class="loading empty">loading…</td></tr></tbody>
       </table>
     </div>
     <div class="meta" id="top-meta">—</div>
@@ -302,6 +354,7 @@
   const PRICES_URL = '/bloomberg_prices.json';
   const SCREENER_CSV_URL = '/long_screener_results.csv';
   const FACTORS_URL = '/factor_signals_bbg.json';
+  const FINNHUB_URL = '/finnhub_signals.json';
 
   // ─────────────────────────────────────────────────────────────
   // CSV parser (RFC-4180-ish: respects double-quoted cells with
@@ -799,6 +852,85 @@
     `;
   }
 
+  // ── Catalysts panel (news + recs + insider) ─────────────────
+  function buildCatalystsPanel(row) {
+    if (!row.fh) return '<div class="pred-history">No Finnhub data yet for ' + row.ticker + ' — next snapshot at HH:05 / HH:35 ET</div>';
+
+    // News block
+    const news = row.fh.news || {};
+    const headlines = (news.headlines || []).slice(0, 5);
+    const newsHtml = headlines.length === 0
+      ? '<div class="news-item"><span class="news-flat">no news in last 24h</span></div>'
+      : headlines.map(h => {
+          const ts = h.ts ? new Date(h.ts * 1000) : null;
+          const tsStr = ts ? `${ts.toLocaleDateString()} ${ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '';
+          // Polarity per headline by keyword presence (re-using the lexicon would be heavy in JS;
+          // we just color by overall ticker polarity)
+          const cls = (news.polarity || 0) > 0.1 ? 'pos' : (news.polarity || 0) < -0.1 ? 'neg' : '';
+          const text = h.h || '(no title)';
+          const link = h.url ? `<a href="${h.url}" target="_blank" rel="noopener">${text}</a>` : text;
+          return `<div class="news-item ${cls}">${link}<div class="src">${h.src || ''} · ${tsStr}</div></div>`;
+        }).join('');
+
+    // Recommendation block
+    const recs = row.fh.recs || {};
+    const cur = recs.current || {};
+    const delta = recs.delta_3m || {};
+    const recHtml = !recs.current
+      ? '<div class="news-flat">no rec data</div>'
+      : `
+        <table class="rec-table">
+          <thead><tr><th></th><th>sB</th><th>B</th><th>H</th><th>S</th><th>sS</th></tr></thead>
+          <tbody>
+            <tr><td>Now (${recs.period || '—'})</td>
+              <td>${cur.strongBuy ?? 0}</td><td>${cur.buy ?? 0}</td>
+              <td>${cur.hold ?? 0}</td><td>${cur.sell ?? 0}</td>
+              <td>${cur.strongSell ?? 0}</td></tr>
+            ${delta && Object.keys(delta).length ? `
+              <tr><td>Δ 3m</td>
+                <td class="${(delta.strongBuy ?? 0) > 0 ? 'rec-up' : (delta.strongBuy ?? 0) < 0 ? 'rec-down' : 'rec-flat'}">${(delta.strongBuy ?? 0) > 0 ? '+' : ''}${delta.strongBuy ?? 0}</td>
+                <td class="${(delta.buy ?? 0) > 0 ? 'rec-up' : (delta.buy ?? 0) < 0 ? 'rec-down' : 'rec-flat'}">${(delta.buy ?? 0) > 0 ? '+' : ''}${delta.buy ?? 0}</td>
+                <td class="${(delta.hold ?? 0) > 0 ? 'rec-up' : (delta.hold ?? 0) < 0 ? 'rec-down' : 'rec-flat'}">${(delta.hold ?? 0) > 0 ? '+' : ''}${delta.hold ?? 0}</td>
+                <td class="${(delta.sell ?? 0) > 0 ? 'rec-down' : (delta.sell ?? 0) < 0 ? 'rec-up' : 'rec-flat'}">${(delta.sell ?? 0) > 0 ? '+' : ''}${delta.sell ?? 0}</td>
+                <td class="${(delta.strongSell ?? 0) > 0 ? 'rec-down' : (delta.strongSell ?? 0) < 0 ? 'rec-up' : 'rec-flat'}">${(delta.strongSell ?? 0) > 0 ? '+' : ''}${delta.strongSell ?? 0}</td>
+              </tr>` : ''}
+            <tr><td>Buy score</td><td colspan="5"><b>${recs.buy_score}</b> = (2×sB + B) − (S + 2×sS)</td></tr>
+          </tbody>
+        </table>`;
+
+    // Insider block — use cached transaction list from raw cache (in fh, only signal+net are exposed)
+    // For richer detail we'd need the script to surface the raw txn list; for now show summary.
+    const ins = row.fh.insider || {};
+    const insHtml = !ins.signal
+      ? '<div class="news-flat">no insider data</div>'
+      : `
+        <div class="insider-row"><span class="nm">Signal</span>
+          <span class="amt ${ins.signal === 'buy' ? 'buy' : ins.signal === 'sell' ? 'sell' : ''}">${ins.signal.toUpperCase()}</span></div>
+        <div class="insider-row"><span class="nm">Net 30d</span>
+          <span class="amt ${(ins.net_30d_dollars||0) > 0 ? 'buy' : (ins.net_30d_dollars||0) < 0 ? 'sell' : ''}">
+            ${(ins.net_30d_dollars||0) >= 0 ? '+' : ''}$${(ins.net_30d_dollars||0).toLocaleString()}</span></div>
+        <div class="insider-row"><span class="nm">Transactions</span>
+          <span>${ins.n_transactions_30d || 0}</span></div>
+        <div class="insider-row"><span class="dt">Threshold ±$100k for signal classification</span></div>`;
+
+    return `
+      <div class="catalysts">
+        <div class="cat-block">
+          <h4>📰 News (last 24h: ${news.count_24h ?? 0} · pol ${(news.polarity ?? 0).toFixed(2)})</h4>
+          <div class="news-list">${newsHtml}</div>
+        </div>
+        <div class="cat-block">
+          <h4>📊 Analyst Recommendations</h4>
+          ${recHtml}
+        </div>
+        <div class="cat-block">
+          <h4>👤 Insider Activity (last 30d)</h4>
+          <div class="insider-list">${insHtml}</div>
+        </div>
+      </div>
+    `;
+  }
+
   // ── Trading levels (entry/exit/stop/target) ──────────────────
   function buildLevelsStrip(row) {
     const bars = row.bars || [];
@@ -896,12 +1028,14 @@
     const chart = buildSparkChart(row.bars || [], row.eod, row.livePx);
     const stats = buildStatsPanel(row);
     const levels = buildLevelsStrip(row);
-    return `<tr class="detail-row"><td colspan="14">
+    const catalysts = buildCatalystsPanel(row);
+    return `<tr class="detail-row"><td colspan="17">
       <div class="detail-top">
         <div>${chart}</div>
         <div>${stats}</div>
       </div>
       ${levels}
+      ${catalysts}
       <div class="detail-grid">${cards}</div>
       ${modelRows ? `
       <div class="detail-models">
@@ -927,16 +1061,20 @@
     }
     tbody.innerHTML = rows.length === 0
       ? '<tr><td colspan="6" class="empty">no overlap with watchlist yet</td></tr>'
-      : rows.map(m => `
+      : rows.map(m => {
+          const pulse = m.newsCnt >= 5 ? '<span class="news-pulse-dot hot" title="' + m.newsCnt + ' articles in 24h"></span>'
+                      : m.newsCnt >= 2 ? '<span class="news-pulse-dot warm" title="' + m.newsCnt + ' articles in 24h"></span>'
+                      : '';
+          return `
         <tr>
-          <td class="tkr">${m.ticker}</td>
+          <td class="tkr">${m.ticker}${pulse}</td>
           <td>${fmtPx(m.livePx)}</td>
           <td class="neutral">${fmtPx(m.eod)}</td>
           <td class="${moveClass(m.move)}">${fmtPct(m.move)}</td>
           <td>${m.rsi == null ? '—' : m.rsi.toFixed(0)}</td>
           <td>${fmtVol(m.volNow)}</td>
         </tr>
-      `).join('');
+      `;}).join('');
     document.getElementById('movers-meta').textContent =
       `${rows.length} of ${lastRows.length} watchlist tickers`;
   }
@@ -948,7 +1086,7 @@
     }
     rows = rows.sort(makeSorter(sortState.top));
     if (rows.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="14" class="empty">no fundamental + BBG overlap yet</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="17" class="empty">no fundamental + BBG overlap yet</td></tr>';
       document.getElementById('top-meta').textContent = '—';
       return;
     }
@@ -984,6 +1122,31 @@
           <td>${m.volRatio == null ? '—' : m.volRatio.toFixed(2)+'x'}</td>
           <td class="${predCls}">${predDisp}</td>
           <td><span class="signal-bars">${sigBars}</span></td>
+          <td class="fh-cell" title="${m.newsCnt} articles in last 24h · polarity ${m.newsPol.toFixed(2)}">
+            ${(() => {
+              const cls = m.newsCnt >= 5 ? 'news-hot' : (m.newsPol > 0.1 ? 'news-pos' : m.newsPol < -0.1 ? 'news-neg' : 'news-flat');
+              return `<span class="${cls}">📰 ${m.newsCnt}</span> <span class="${m.newsPol >= 0 ? 'news-pos' : 'news-neg'}">${m.newsPol >= 0 ? '+' : ''}${m.newsPol.toFixed(2)}</span>`;
+            })()}
+          </td>
+          <td class="fh-cell" title="${m.recCurrent ? `Current: ${m.recCurrent.strongBuy||0}sB ${m.recCurrent.buy||0}B ${m.recCurrent.hold||0}H ${m.recCurrent.sell||0}S ${m.recCurrent.strongSell||0}sS` : 'no rec data'}">
+            ${(() => {
+              if (m.recScore == null) return '<span class="news-flat">—</span>';
+              const d = m.recDelta?.buy ?? 0;
+              const dS = (m.recDelta?.strongBuy ?? 0) - (m.recDelta?.strongSell ?? 0);
+              const trend = (d + dS) > 0 ? 'up' : (d + dS) < 0 ? 'down' : 'flat';
+              const arrow = trend === 'up' ? '↑' : trend === 'down' ? '↓' : '→';
+              return `<span class="rec-${trend}">${arrow} ${m.recScore}</span>`;
+            })()}
+          </td>
+          <td class="fh-cell" title="${m.insSignal ? `${m.insN} txns · net $${m.insNet?.toLocaleString() ?? '—'} (last 30d)` : 'no insider data'}">
+            ${(() => {
+              if (!m.insSignal) return '<span class="news-flat">—</span>';
+              const cls = 'ins-' + m.insSignal;
+              const sign = m.insNet >= 0 ? '+' : '';
+              const millions = m.insNet ? Math.abs(m.insNet) >= 1e6 ? (sign + (m.insNet/1e6).toFixed(1)+'M') : (sign + (m.insNet/1e3).toFixed(0)+'k') : '0';
+              return `<span class="${cls}">$ ${millions}</span>`;
+            })()}
+          </td>
           <td>${m.action ? '<span class="badge '+m.action.cls+'">'+m.action.l+'</span>' : '—'}</td>
         </tr>
       `);
@@ -1035,6 +1198,20 @@
       return lastFundamentals;
     }
   }
+  let lastFinnhub = {};
+  async function fetchFinnhub() {
+    try {
+      const r = await fetch(FINNHUB_URL + '?_=' + Date.now(), { cache: 'no-cache' });
+      if (!r.ok) throw new Error('finnhub ' + r.status);
+      const j = await r.json();
+      lastFinnhub = j?.tickers || {};
+      return { tickers: lastFinnhub, generated_at: j?.generated_at };
+    } catch (e) {
+      // Silent — Finnhub feed is optional. Return last successful snapshot.
+      return { tickers: lastFinnhub, generated_at: null };
+    }
+  }
+
   async function fetchMarketBias() {
     try {
       const r = await fetch(FACTORS_URL + '?_=' + Date.now(), { cache: 'no-cache' });
@@ -1057,10 +1234,11 @@
   // ── Main refresh tick ─────────────────────────────────────────
   async function refresh() {
     try {
-      const [bbgR, fundamentals, bias] = await Promise.all([
+      const [bbgR, fundamentals, bias, finnhub] = await Promise.all([
         fetch(PRICES_URL + '?_=' + Date.now(), { cache: 'no-cache' }),
         fetchFundamentals(),
         fetchMarketBias(),
+        fetchFinnhub(),
       ]);
       if (!bbgR.ok) throw new Error('bbg ' + bbgR.status);
       const bbg = await bbgR.json();
@@ -1123,6 +1301,19 @@
         const volRatio = (volNow != null && adv) ? volNow / adv : null;
         const action  = actionLabel(pred.signedScore, fund?.composite_score, move);
         const sigCount = (pred.signalDirs || []).filter(d => d !== 0).length;
+        // Finnhub join
+        const fh        = (finnhub.tickers || {})[t] || null;
+        const fhNews    = fh?.news    || null;
+        const fhRecs    = fh?.recs    || null;
+        const fhIns     = fh?.insider || null;
+        const newsCnt   = fhNews?.count_24h ?? 0;
+        const newsPol   = fhNews?.polarity  ?? 0;
+        // Composite scoring key for the News column: count weighted by polarity sign,
+        // so high-volume positive news ranks above quiet positive, and high-volume
+        // negative news sorts to the bottom.
+        const newsScore = (newsCnt || 0) * (newsPol >= 0 ? 1 : -1) + (newsPol || 0) * 5;
+        const recScore  = fhRecs?.buy_score ?? null;
+        const insScore  = fhIns?.signal === 'buy' ? 1 : fhIns?.signal === 'sell' ? -1 : 0;
         enriched.push({
           ticker: t, livePx, eod, move, rsi, volNow, adv, volRatio,
           predScore:    pred.score,        // unsigned magnitude (kept for back-compat)
@@ -1137,6 +1328,10 @@
           upsidePct: fund?.upside_pct ?? null,
           fund,
           bars: w.bars || [],          // for chart + levels
+          fh, newsCnt, newsPol, newsScore,
+          recScore, recCurrent: fhRecs?.current ?? null, recDelta: fhRecs?.delta_3m ?? null,
+          insSignal: fhIns?.signal ?? null, insNet: fhIns?.net_30d_dollars ?? null,
+          insN: fhIns?.n_transactions_30d ?? 0, insScore,
           action, actionRank: action.rank,
         });
       });
