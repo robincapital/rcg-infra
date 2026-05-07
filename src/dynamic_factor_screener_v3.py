@@ -25,6 +25,7 @@ Derives macro regime factors from ETF data (SPY, IWM, VTV, VUG, USMV, VYM)
 to dynamically weight BOTH fundamental AND technical/momentum scoring criteria.
 """
 
+import os
 import polars as pl
 import numpy as np
 from scipy import stats
@@ -2556,6 +2557,14 @@ def main(market_cap_preset=None, fed_target_rate=None, fed_neutral_rate=None,
             print(f"  [WARN] Watchlist SCP failed: {scp_result.stderr.strip()[:200]}")
     except Exception as _e:
         print(f"  [WARN] Watchlist auto-update skipped: {_e}")
+
+    # Skip the interactive HTTP server when running as a systemd service —
+    # the persistent /home/nixos/Prod/V1/outputs/ http.server already owns 8080.
+    # Set by the systemd wrapper. Headless runs return cleanly with the outputs
+    # written; ad-hoc / notebook runs still get a server for convenience.
+    if os.environ.get("RCG_SCREENER_NO_SERVE") == "1":
+        print(f"\n  Done. Outputs ready: http://rcg-nixos:8080/{html_path.name}")
+        return scored, factors
 
     if __name__ == "__main__" and not _is_notebook():
         import http.server
