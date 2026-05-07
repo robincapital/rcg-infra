@@ -226,22 +226,70 @@ def process_recs(rec_list) -> dict | None:
 
 
 def process_insider(txns) -> dict | None:
-    """Net dollar flow from insiders over the lookback window (positive = net buy)."""
+    """
+    Insider activity, split by Form-4 transaction code so tax/exercise-driven
+    transactions don't pollute the directional signal.
+
+    Codes (SEC Form 4):
+      P  open-market PURCHASE          → discretionary, asymmetric, predictive
+      S  open-market SALE              → discretionary but often via 10b5-1; weaker
+      F  share withholding for tax/exercise  → MECHANICAL, ignored for direction
+      M  exercise of derivative              → MECHANICAL
+      D  derivative disposition              → MECHANICAL
+      A  grant or award                      → MECHANICAL
+      G  bona fide gift                      → MECHANICAL
+
+    The headline `signal` is driven by net PURCHASES only (the asymmetric signal
+    that academic research finds predictive). Discretionary sales are surfaced
+    as a separate channel; mechanical transactions are tracked but never
+    flagged as directional.
+    """
     if not txns or not isinstance(txns, dict):
         return None
     data = txns.get("data") or []
     if not data:
-        return {"net_30d_dollars": 0, "n_transactions_30d": 0, "signal": "neutral"}
-    net = 0.0
+        return {
+            "buys_30d_usd": 0, "sells_30d_usd": 0, "mechanical_30d_usd": 0,
+            "n_buys": 0, "n_sells": 0, "n_mechanical": 0,
+            "n_transactions_30d": 0, "signal": "neutral",
+        }
+
+    buys_usd = sells_usd = mech_usd = 0.0
+    n_buys = n_sells = n_mech = 0
+
     for t in data:
-        change = t.get("change") or 0          # signed shares
+        code   = (t.get("transactionCode") or "").upper()
+        change = t.get("change") or 0
         price  = t.get("transactionPrice") or 0
-        net += change * price
-    label = "buy" if net > 100_000 else "sell" if net < -100_000 else "neutral"
+        notional = change * price  # signed
+        if code == "P":
+            buys_usd += notional
+            n_buys += 1
+        elif code == "S":
+            sells_usd += notional   # sells_usd will be negative since `change` < 0
+            n_sells += 1
+        else:
+            mech_usd += notional
+            n_mech += 1
+
+    # Signal is purchase-driven: > $100k net buying = "buy"; > $250k discretionary
+    # selling AND no buying activity = "sell" (still a noisy bar). Otherwise neutral.
+    if buys_usd > 100_000:
+        signal = "buy"
+    elif buys_usd <= 0 and sells_usd < -250_000:
+        signal = "sell"
+    else:
+        signal = "neutral"
+
     return {
-        "net_30d_dollars":     round(net),
-        "n_transactions_30d":  len(data),
-        "signal":              label,
+        "buys_30d_usd":          round(buys_usd),
+        "sells_30d_usd":         round(sells_usd),
+        "mechanical_30d_usd":    round(mech_usd),
+        "n_buys":                n_buys,
+        "n_sells":                n_sells,
+        "n_mechanical":          n_mech,
+        "n_transactions_30d":    len(data),
+        "signal":                signal,
     }
 
 
@@ -333,8 +381,17 @@ def main() -> None:
                               value=float(recs["buy_score"])); n_sig += 1
         insider = t.get("insider")
         if insider:
-            sdb.record_signal(run_id, ticker, "insider_net_30d_usd",
-                              value=float(insider.get("net_30d_dollars", 0))); n_sig += 1
+            # Split-channel insider signals (purchases vs discretionary sells vs mechanical)
+            sdb.record_signal(run_id, ticker, "insider_buys_30d_usd",
+                              value=float(insider.get("buys_30d_usd", 0))); n_sig += 1
+            sdb.record_signal(run_id, ticker, "insider_sells_30d_usd",
+                              value=float(insider.get("sells_30d_usd", 0))); n_sig += 1
+            sdb.record_signal(run_id, ticker, "insider_mechanical_30d_usd",
+                              value=float(insider.get("mechanical_30d_usd", 0))); n_sig += 1
+            sdb.record_signal(run_id, ticker, "insider_n_buys",
+                              value=float(insider.get("n_buys", 0))); n_sig += 1
+            sdb.record_signal(run_id, ticker, "insider_n_sells",
+                              value=float(insider.get("n_sells", 0))); n_sig += 1
             sdb.record_signal(run_id, ticker, "insider_signal",
                               string=insider.get("signal", "neutral")); n_sig += 1
 

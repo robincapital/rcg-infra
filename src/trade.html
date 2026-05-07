@@ -63,8 +63,9 @@
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
   th, td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: right; vertical-align: middle; white-space: nowrap; }
   th { background: var(--panel2); color: var(--dim); font-weight: 600; text-align: right;
-       position: sticky; top: 0; z-index: 5; user-select: none; cursor: pointer; }
-  th:hover { color: var(--gold); }
+       position: sticky; top: 0; z-index: 5; user-select: none; cursor: pointer;
+       border-bottom: 1px dotted rgba(201, 168, 76, 0.4); }
+  th:hover { color: var(--gold); border-bottom-color: var(--gold); }
   th.sorted { color: var(--gold); }
   th.sorted::after { content: " ↓"; }
   th.sorted.asc::after { content: " ↑"; }
@@ -976,20 +977,35 @@
           </tbody>
         </table>`;
 
-    // Insider block — use cached transaction list from raw cache (in fh, only signal+net are exposed)
-    // For richer detail we'd need the script to surface the raw txn list; for now show summary.
+    // Insider block — split-channel: purchases (P) / discretionary sells (S) /
+    // mechanical (F, M, D, A — tax/exercise/vest, not directional).
     const ins = row.fh.insider || {};
-    const insHtml = !ins.signal
+    const fmtUsd = (v) => {
+      v = v || 0;
+      const abs = Math.abs(v);
+      const s = v >= 0 ? '+' : '−';
+      if (abs >= 1e6) return `${s}$${(abs/1e6).toFixed(2)}M`;
+      if (abs >= 1e3) return `${s}$${(abs/1e3).toFixed(0)}k`;
+      return `${s}$${abs.toFixed(0)}`;
+    };
+    const insHtml = !ins.signal && !ins.n_transactions_30d
       ? '<div class="news-flat">no insider data</div>'
       : `
         <div class="insider-row"><span class="nm">Signal</span>
-          <span class="amt ${ins.signal === 'buy' ? 'buy' : ins.signal === 'sell' ? 'sell' : ''}">${ins.signal.toUpperCase()}</span></div>
-        <div class="insider-row"><span class="nm">Net 30d</span>
-          <span class="amt ${(ins.net_30d_dollars||0) > 0 ? 'buy' : (ins.net_30d_dollars||0) < 0 ? 'sell' : ''}">
-            ${(ins.net_30d_dollars||0) >= 0 ? '+' : ''}$${(ins.net_30d_dollars||0).toLocaleString()}</span></div>
-        <div class="insider-row"><span class="nm">Transactions</span>
-          <span>${ins.n_transactions_30d || 0}</span></div>
-        <div class="insider-row"><span class="dt">Threshold ±$100k for signal classification</span></div>`;
+          <span class="amt ${ins.signal === 'buy' ? 'buy' : ins.signal === 'sell' ? 'sell' : ''}">
+            ${(ins.signal || 'NEUTRAL').toUpperCase()}</span></div>
+        <div class="insider-row" style="border-bottom: 1px dashed rgba(255,255,255,0.06); padding-bottom:3px;">
+          <span class="nm" style="color:var(--green)">P · Open-market PURCHASES</span>
+          <span class="amt ${(ins.buys_30d_usd||0) > 0 ? 'buy' : ''}">${fmtUsd(ins.buys_30d_usd)}  (n=${ins.n_buys || 0})</span></div>
+        <div class="insider-row" style="border-bottom: 1px dashed rgba(255,255,255,0.06); padding-bottom:3px;">
+          <span class="nm" style="color:var(--red)">S · Discretionary SELLS</span>
+          <span class="amt ${(ins.sells_30d_usd||0) < 0 ? 'sell' : ''}">${fmtUsd(ins.sells_30d_usd)}  (n=${ins.n_sells || 0})</span></div>
+        <div class="insider-row" style="opacity:0.55;">
+          <span class="nm">F/M/D/A · Mechanical (tax/vest)</span>
+          <span class="amt">${fmtUsd(ins.mechanical_30d_usd)}  (n=${ins.n_mechanical || 0})</span></div>
+        <div class="insider-row" style="margin-top:4px;">
+          <span class="dt">Purchases (P) drive signal — discretionary, asymmetric, predictive.<br>
+            Mechanical txns (vest/exercise/tax) are excluded from direction.</span></div>`;
 
     return `
       <div class="catalysts">
@@ -1257,13 +1273,28 @@
               return `<span class="rec-${trend}">${arrow} ${m.recScore}</span>`;
             })()}
           </td>
-          <td class="fh-cell" title="${m.insSignal ? `${m.insN} txns · net $${m.insNet?.toLocaleString() ?? '—'} (last 30d)` : 'no insider data'}">
+          <td class="fh-cell" title="${(() => {
+              if (!m.fh?.insider) return 'no insider data';
+              const fmt = (v) => Math.abs(v) >= 1e6 ? `$${(v/1e6).toFixed(1)}M` : `$${(v/1e3).toFixed(0)}k`;
+              return `Last 30d (Form-4 split):
+  Purchases (P):       ${m.insNBuys}  ${fmt(m.insBuys)}
+  Discretionary sells: ${m.insNSells}  ${fmt(m.insSells)}
+  Mechanical (F/M/D/A): ${m.insNMech}  ${fmt(m.insMech)}
+Signal: ${m.insSignal ?? 'neutral'}`;
+            })()}">
             ${(() => {
-              if (!m.insSignal) return '<span class="news-flat">—</span>';
-              const cls = 'ins-' + m.insSignal;
-              const sign = m.insNet >= 0 ? '+' : '';
-              const millions = m.insNet ? Math.abs(m.insNet) >= 1e6 ? (sign + (m.insNet/1e6).toFixed(1)+'M') : (sign + (m.insNet/1e3).toFixed(0)+'k') : '0';
-              return `<span class="${cls}">$ ${millions}</span>`;
+              if (!m.fh?.insider) return '<span class="news-flat">—</span>';
+              const buys  = m.insBuys  || 0;
+              const sells = m.insSells || 0;
+              const fmtMag = (v) => Math.abs(v) >= 1e6 ? (Math.abs(v)/1e6).toFixed(1)+'M' : (Math.abs(v)/1e3).toFixed(0)+'k';
+              if (buys > 100_000) {
+                return `<span class="ins-buy">$ +${fmtMag(buys)}</span>`;
+              }
+              if (buys === 0 && sells <= -250_000) {
+                // Discretionary sells with no buys — secondary signal, muted
+                return `<span class="ins-sell" style="opacity:0.65">$ −${fmtMag(sells)}</span>`;
+              }
+              return '<span class="news-flat">—</span>';
             })()}
           </td>
           <td>${m.action ? '<span class="badge '+m.action.cls+'">'+m.action.l+'</span>' : '—'}</td>
@@ -1471,8 +1502,15 @@
           bars,                          // for chart + levels (empty array if no BBG)
           fh, newsCnt, newsPol, newsScore,
           recScore, recCurrent: fhRecs?.current ?? null, recDelta: fhRecs?.delta_3m ?? null,
-          insSignal: fhIns?.signal ?? null, insNet: fhIns?.net_30d_dollars ?? null,
-          insN: fhIns?.n_transactions_30d ?? 0, insScore,
+          insSignal: fhIns?.signal ?? null,
+          insBuys:   fhIns?.buys_30d_usd ?? 0,
+          insSells:  fhIns?.sells_30d_usd ?? 0,
+          insMech:   fhIns?.mechanical_30d_usd ?? 0,
+          insNBuys:  fhIns?.n_buys ?? 0,
+          insNSells: fhIns?.n_sells ?? 0,
+          insNMech:  fhIns?.n_mechanical ?? 0,
+          insN:      fhIns?.n_transactions_30d ?? 0,
+          insScore,
           action, actionRank: action.rank,
         });
       });
@@ -1500,6 +1538,36 @@
 
   attachSortHandlers('movers-tbl', 'movers', renderMoversTable);
   attachSortHandlers('top-tbl',    'top',    renderTopTable);
+
+  // ─── Column header tooltips ─────────────────────────────────────
+  // Hover any column header for a full description: what it is, how it's
+  // computed, and how to interpret it. Click to sort.
+  const columnHelp = {
+    rank: "RANK\nPosition by composite_score within the current cap-bucket subset.\n1 = highest fundamental + technical composite from this morning's screener.\nClick to sort by rank.",
+    ticker: "TICKER\nClick the ticker cell to expand inline detail:\n  · price chart with SMA-5/20 + VWAP + sigma band\n  · stats panel (5-bar momentum, vs-VWAP, range exp, V/ADV)\n  · trading levels (entry/target/stop by signal direction)\n  · news headlines + analyst recs + insider activity\n  · per-model PT breakdown + gates fired",
+    composite: "COMPOSITE SCORE (0–1.5+)\nScreener output: weighted blend of fundamental factor z-scores\n(revenue/EBITDA/FCF/debt trends, quality) + technical factor\nz-scores (RSI, SMA cross, momentum) + Finnhub overlays\n(sentiment, upside).\n\nWeights are dynamic — adjusted by today's market regime\n(bullish regime boosts technicals, bearish boosts fundamentals).\n\nHigher = better-ranked by today's screener pipeline.\nRefreshes once per day at 05:00 ET.",
+    mktcap: "MARKET CAP\nFrom Sharadar SF1 (most recent fundamental snapshot).\nUse the toolbar Mkt cap selector to filter:\n  Large = ≥ $10B    Mid = $2B–$10B    Small = $300M–$2B",
+    eod: "EOD CLOSE\nLast settled close from Sharadar SEP (typically previous trading day).\nUsed as the reference for intraday Move % and trading-level math.\nRefreshes daily after the screener run picks up new SEP data.",
+    livePx: "LIVE PRICE\nCurrent Bloomberg price from blpapi pull on the desktop.\nRefreshes every 30 min during market hours (NixOS-driven schedule).\nStale ages > 30 min indicate a missed BBG fire — check the BBG age in the header.",
+    move: "INTRADAY MOVE %\n(LivePrice − EODClose) / EODClose × 100.\nGreen = up, red = down. Strong colors at ±5%.\nRequires both BBG live and screener EOD data; shows '—' if either missing.",
+    targetPx: "PRICE TARGET (PT)\nFrom price_targets engine — multi-model conviction-weighted blend:\n  · EV/EBITDA      (sector-anchored, rate-compressed)\n  · EV/Revenue     (growth-adjusted)\n  · FCF Yield      (quality-adjusted, runaway-capped)\n  · Emerging Growth (TAM-projected, blended @ 50%)\n\nEach model gated by R² floor (0.20+), then blended by conviction,\nthen clipped to analyst consensus envelope (Gates A/B/C from Phase 1).\n\npt_source label in detail panel:\n  M✓ = aligned with consensus\n  M*  = flagged but published (40–75% divergence)\n  M⚠clip = clipped to consensus envelope\n  A   = fallback to consensus\n  N/A = no PT computed",
+    upsidePct: "UPSIDE %\n(TargetPrice / LivePrice − 1) × 100.\nGreen = positive (PT > current), red = negative.\nUse with PT source label — wider divergence (M⚠clip) means engine\nand analysts disagree, deserves a closer look at the detail panel.",
+    rsi: "INTRADAY RSI-14\nWilder's RSI computed from BBG hourly bars over the trailing 14 bars.\n>70 = overbought, <30 = oversold (classical thresholds).\nNote: this is intraday RSI on hourly bars — fast-moving and lags less\nthan daily RSI. Use as a short-term overextension indicator only.",
+    volRatio: "VOLUME / ADV\nToday's cumulative bar volume divided by average daily volume\nfrom the most recent completed prior days (BBG bars).\n1.0 = pacing average. > 1.5 = elevated activity.\nA high ratio early in the session is a leading-volume signal.",
+    signedScore: "PREDICTIVE SCORE (signed, −100 to +100)\nClient-side composite of 5 BBG-derived sub-signals:\n  · Volume surge   (current bar vs 5-bar avg)\n  · UDV ratio      (up-volume bars / total)\n  · Acceleration   (3-bar return vs prior 3-bar)\n  · VWAP slope     (today's VWAP first → last)\n  · Range expansion (price vs yesterday's H/L)\n\nDirection inherited from sub-signal alignment.\nPositive = bullish, negative = bearish.\n\nUser-bias toolbar adds ±25 to display value — DOES NOT change\nthe captured DB record (predictions stay unbiased for analysis).",
+    signalsScore: "SIGNAL BARS\n5 directional indicators showing which sub-signals are firing:\n  Volume · UDV · Acceleration · VWAP · Range Expansion\nGreen = bullish-firing, red = bearish-firing, dim = off.\nMore bars lit = higher conviction.",
+    newsScore: "NEWS (Finnhub /company-news, last 24h)\nFormat: 📰 count  +polarity\n  count = articles in the past 24h (gold tint at ≥5 = 'in the news cycle')\n  polarity = bag-of-words score in [−1, +1]:\n    pos words: beat, raise, upgrade, growth, surge, profit...\n    neg words: miss, cut, downgrade, fraud, lawsuit, recall...\n\nNote: keyword-based polarity is naive — always read actual\nheadlines in the detail panel for catalysts.",
+    recScore: "ANALYST RECOMMENDATIONS (Finnhub /stock/recommendation)\nFormat: arrow + buy_score\n  buy_score = (2×strongBuy + buy) − (sell + 2×strongSell)\n  Positive = bullish consensus, negative = bearish\n\nArrow = 3-month delta direction:\n  ↑ = analysts upgrading\n  ↓ = analysts downgrading\n  → = stable\n\nThe arrow matters more than the absolute number.\nHover the cell for current breakdown by recommendation type.",
+    insScore: "INSIDER ACTIVITY (Finnhub /stock/insider-transactions, last 30d)\nForm-4 transactions split by SEC code:\n  P  = open-market PURCHASE       (discretionary, predictive)\n  S  = open-market SALE           (discretionary, weaker signal — often via 10b5-1)\n  F/M/D/A = tax/vest/exercise/grant (MECHANICAL — excluded from direction)\n\nDisplay shows:\n  '$ +X.XM'  (green) = net purchases > $100k — strongest signal\n  '$ −X.XM'  (red, muted) = net discretionary sells > $250k AND no purchases\n  '—'       = nothing meaningful\n\nMechanical txns (tax-cover from RSU vesting, etc.) are tracked\nin DB and detail panel but never drive the headline signal,\nbecause they're not directional.",
+    actionRank: "ACTION LABEL\nDerived from signedScore + intraday move % + (optionally) fundamental composite:\n  PRE-BREAKOUT  (≥+65 score, |move|<2%) — bull early signal\n  BREAKOUT      (≥+65, move≥+2%) — bull confirmed\n  STRONG        (composite≥0.7 + score≥+25) — fundamentals + decent momentum\n  WATCH         (+25 to +65) — mild bull\n  NEUTRAL       (|score|<25) — middle of pack\n  WEAKENING     (−25 to −65) — mild bear\n  PRE-BREAKDOWN (≤−65, |move|<2%) — bear early signal\n  BREAKDOWN     (≤−65, move≤−2%) — bear confirmed\n\nClick any badge in the legend to filter table to that action.",
+  };
+  function attachColumnTooltips() {
+    document.querySelectorAll('th[data-col]').forEach(th => {
+      const help = columnHelp[th.dataset.col];
+      if (help) th.title = help + '\n\n[click to sort by this column]';
+    });
+  }
+  attachColumnTooltips();
 
   // Click on a legend badge to filter the Top 40 table to that action
   document.querySelectorAll('.legend .badge[data-filter]').forEach(b => {
