@@ -1,6 +1,6 @@
 # RCG Signal Capture — CONTEXT
-**Last updated:** 2026-05-06
-**Status:** Phase 2A Sessions 1–4 complete; Session 5 (shadow observation) ongoing; Live Trading dashboard + predictions capture live
+**Last updated:** 2026-05-07
+**Status:** Phase 2A Sessions 1–4 complete; Session 5 (shadow observation) ongoing; Live Trading dashboard + predictions capture live; Phase A/B (forward returns + per-ticker drill-down) shipped; Model Tournament v12 live with 10 entrants + user-pinned ("starred"/ad-hoc) ticker system
 
 ---
 
@@ -360,6 +360,97 @@ natively.
       `fetch('/bloomberg_prices.json')` from the static port-8080 server
     - `factor_signals_bbg.json` symlinked similarly for the bias chip
 
+**8. Phase A — forward-return capture + assertiveness (May 6, v10 lineage)**
+- New `src/forward_returns_capture.py` joins each `live_prediction` snapshot
+  with later snapshots of the same ticker around T + horizon, computes the
+  realized return %, and writes it back as `realized_return_<horizon>_pct`
+  signals on the ORIGINAL prediction's `run_id`. Horizons captured intraday:
+  **30min, 60min, 4h** (15-min tolerance for 30/60, 30-min for 4h).
+  Daily horizons (1d, 5d, 20d) come from a separate process that joins with
+  EOD closes.
+- Idempotent — predictions that already have `realized_return_<horizon>` are
+  skipped on every fire. Lookback window: 7 days.
+- Systemd timer fires every 30 min (after each predictions_capture timer).
+  Newer predictions get filled in as time elapses.
+- **Per-ticker prediction time-series drill-down**: dashboard's expanded
+  detail row now embeds an SVG chart from `GET /predictions/<TICKER>?hours=N`
+  (port 8085, served by `sentiment_refresh_server.py`). Pivots all signals
+  for the ticker by `run_id` (each fire = one snapshot). Once realized
+  returns flow in, the chart adds rings on each prediction point colored by
+  realized direction-match (green/red/grey).
+- **Assertiveness footer**: client-side IC computation over the prediction
+  history rows — for each numeric signal column, count how often
+  `sign(score) == sign(realized_return)` when |score| ≥ 25. Becomes
+  meaningful once 2+ days of capture have elapsed.
+
+**9. Watchlist expansion + correlation matrix (May 6, v10)**
+- Watchlist auto-update produces top-40 (final ranked) + top-25-per-cap-bucket
+  (large/mid/small from full universe) + 18 cross-asset ETFs (capped at 120).
+  Replaces previous "top-40 only" approach so the dashboard's cap-filter
+  surfaces names with live BBG data.
+- New `src/correlation_matrix.py` reads SFP (ETFs/funds parquet — NOT SEP),
+  computes 30d/90d/1y rolling Pearson correlations across 19 cross-asset
+  ETFs (SPY/QQQ/IWM/EFA/EEM/XLK/XLE/XLF/XLV/TLT/IEF/HYG/LQD/GLD/SLV/USO/
+  DBC/UUP/VXX), emits `outputs/correlations.json`. Daily timer at 05:30.
+- Dashboard renders an inferno heatmap with 30d/90d/1y/Δ(30d−1y) toggles.
+  Δ mode surfaces names whose recent correlation has shifted from baseline
+  (regime-change indicator).
+
+**10. Model tournament v11 → v12 (May 6 → 7)**
+- New `src/models_capture.py` — runs every prediction model in a tournament
+  every 30 min. Each model implements `score(bars) → float` returning a
+  directional score (typically -100..+100, ranked by IC). Captures under
+  `run_type='model_score'`, `signal_name='model_<name>_score'`. Forward
+  returns and IC computation pick up new models automatically.
+- New `src/models_leaderboard.py` — daily 06:00 query computes per-(model,
+  horizon) IC (sign-match + Spearman), hit rate, sample size, avg score
+  magnitude, avg realized. Outputs `leaderboard.json`. Dashboard renders
+  a full-width scatter (X = sample size, Y = realized IC, color = direction
+  agreement, size = avg |signal|) with the BBG `pred_signed_score`
+  composite included as a baseline competitor.
+- **v12 (May 7) — roster expanded 4 → 10 entrants**:
+    momentum_5bar · mean_rev_20 · rsi_extreme_14 · sma_cross_5_20
+    ema_cross_12_26 · bollinger_pos_20 · donchian_break_20 · lr_slope_20
+    arima_1 (AR(1) on log-returns) · combo_trend (avg of trend models)
+- Models needing ≥26 bars (ema_cross) or ≥30 bars (arima_1) return None
+  for tickers without enough capture history; that's expected and they
+  start scoring after a few more capture cycles.
+
+**11. User-pinned ("starred"/ad-hoc) ticker system (May 7, v12)**
+- New `src/user_pinned.json` stores a persistent list of tickers that
+  survive every screener regeneration and are force-included in the BBG
+  pull. Same backend powers two UX paths:
+    - Row-level **★ button** in Top 40 + Top Movers (track names you don't
+      want to lose when they drop out of the fundamental screen)
+    - Toolbar **ad-hoc input** (analyze any ticker, even if it never shows
+      in the screener)
+- Endpoints in `sentiment_refresh_server.py` (port 8085, CORS-enabled with
+  preflight + ticker validation):
+    GET    /pinned                → list pinned tickers
+    POST   /pinned/<TICKER>       → pin · appends to watchlist.json,
+                                    SCPs to Windows Dropbox path,
+                                    triggers BBG /refresh in background
+    DELETE /pinned/<TICKER>       → unpin (next screener cycle drops it)
+- Ticker validation regex: `^[A-Z][A-Z0-9.\-]{0,9}$` (1–10 chars, starts
+  with letter, allows BRK.B / BF-A style).
+- `dynamic_factor_screener_v3.py` merges `user_pinned.json` into
+  `final_watchlist` before the 120 cap, then force-includes any pinned
+  cropped by the cap (so users who pin >80 still get all of them).
+- Dashboard:
+    - Toolbar **"Track: All / Starred"** group filters Top 40 to pinned-only
+      (bypasses cap + composite + action filters so ad-hoc names with no
+      screener data still show)
+    - Ad-hoc input auto-flips to Starred view on submit + shows
+      "pulling BBG…" feedback for ~18s while the new ticker's data
+      populates
+    - Pinned set re-syncs every 5 min so multiple browser tabs stay
+      consistent
+- `src/user_pinned.json` is gitignored — runtime state, not repo state.
+- End-to-end verified: pin PLTR → POST returns `newly_pinned: true` →
+  watchlist updated + SCP'd → BBG pulled (`price=137.05, bars=21`) →
+  7/10 models scored it (3 longer-window models await more bars) →
+  DELETE removed cleanly.
+
 ### Pending Session 4 polish (low priority)
 - **ADC reauth** — `gcloud auth application-default login` on NixOS was attempted
   but didn't save. Not blocking anything currently; CLI auth is enough for the
@@ -386,6 +477,18 @@ natively.
 - [ ] Session 4 (cleanup): ADC reauth on NixOS (only when first Python SDK call needed),
        Finnhub key rotation + env-var refactor, bloomberg_prices.py to repo
 - [ ] Session 5: end-to-end smoke test, 24h shadow observation
+- [x] Phase A: forward-return capture (30min/60min/4h horizons) + per-ticker
+       prediction time-series drill-down + assertiveness footer (May 6)
+- [x] v10: watchlist expansion (top-40 + cap-bucket top-25 + cross-asset ETFs,
+       capped at 120) + cross-asset correlation matrix panel (May 6)
+- [x] v11/v12: model tournament (10 entrants) + leaderboard panel + IC-based
+       walk-forward weight rebalance scaffold (May 6–7)
+- [x] User-pinned ticker system: persistent ★ favorites + ad-hoc ticker entry
+       with immediate BBG-pull side-effect (May 7)
+- [ ] Phase 1 ML: walk-forward weight rebalancing once 2+ weeks of (model_score,
+       realized_return) pairs are captured (target: late-May 2026)
+- [ ] Phase 2 ML: logistic-regression conviction model on the captured signal
+       table once 4–8 weeks of history exist (target: mid-June 2026)
 - [ ] Data-quality audit: investigate `started_at`/`n_tickers_in` None values, signal-count
        drift across runs (precondition for Phase 2D attribution)
 - [ ] Phase 2B (after shadow week): `enriched_prices.py` + `short_term_alpha.py`
