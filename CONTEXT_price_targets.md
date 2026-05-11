@@ -1,6 +1,6 @@
 # RCG Price Targets — CONTEXT
-**Last updated:** 2026-05-06
-**Status:** Day 5 complete — engine consolidation done. Phase 1 closed.
+**Last updated:** 2026-05-11
+**Status:** Day 5 complete (engine consolidation, Phase 1 closed); v13 added per-ticker user growth-assumption overrides + 6q LR baseline + 1-page valuation report endpoint.
 
 ---
 
@@ -200,6 +200,104 @@ Eliminates the residual `pt_source = N/A` from Day 4.
     optimistic. No regression.
 - Screener pool change is logic-only — next 05:00 ET screener cron
   (Mon–Fri) will be the live integrated test.
+
+---
+
+## v13 — Per-ticker user growth-assumption overrides + valuation report (2026-05-11)
+
+### What changed
+**1. `price_targets.py` gains an optional `growth_overrides` kwarg.**
+`compute_target_price()` accepts a dict with up to four keys:
+`rev_growth_ann_pct`, `fcf_growth_ann_pct`, `ebitda_margin_now_pct`,
+`debt_paydown_ann_pct`. When provided, the engine replaces each model's
+Theil-Sen forward projection with a user-set annualized growth rate
+compounded off the latest quarterly value via the new helper
+`_apply_growth_override()`. Debt paydown is applied to `latest_debt` before
+EV is computed. `growth_overrides=None` (the default) is a no-op —
+existing screener and report callers unchanged, daily PT output is
+byte-identical.
+
+**2. New `compute_growth_baseline()` — trailing 6q OLS-slope annualized.**
+Returns the baseline values shown as slider midpoints in the dashboard's
+per-ticker Assumptions panel. The engine still uses Theil-Sen over the
+*full* trailing series as its default projection (unchanged); the 6q OLS
+baseline is a UI reference point only. Window size is configurable via
+`_BASELINE_QUARTERS` (currently 6 — balances responsiveness with some
+seasonality smoothing per user spec).
+
+**3. New `src/fundamentals_lookup.py`.**
+Single source of truth for "fetch this ticker's quarterly fundamentals."
+Filters SF1 to `dimension='MRQ'` (Most-Recent Quarterly, restated) so each
+row is a clean point-in-time quarter — fixes the longstanding issue where
+the screener was reading mixed ARQ/ART/MRT rows producing alternating
+high/low values that broke trend regression at short windows. The screener
+itself was NOT changed (touching it would shift every daily PT); the new
+module is used only by the server's `/assumptions` and `/report` endpoints.
+Cached via `functools.lru_cache(maxsize=1)`; invalidate after the daily
+Sharadar pull with `invalidate_cache()`.
+
+**4. New `/assumptions` and `/report` endpoints in `sentiment_refresh_server.py`.**
+- `GET/POST/DELETE /assumptions/<TICKER>` — load, save (with sanitization
+  + range clamping), clear overrides. POST recomputes the PT and returns
+  both `pt_engine_default` and `pt_with_overrides` side-by-side so the
+  dashboard can show both.
+- `GET /assumptions` (no ticker) — list of tickers with stored overrides,
+  used by the dashboard for the orange-dot indicator on Top 40 PT cells.
+- `GET /report/<TICKER>` — deterministic valuation rubric (STRONG BUY /
+  BUY / HOLD / REDUCE / SELL scored from upside × quality × PT-source-flag
+  × gates) plus optional 2-sentence Claude Haiku 4.5 narration. LLM call
+  reads `~/.anthropic_api_key` or `$ANTHROPIC_API_KEY`; gracefully degrades
+  to placeholder text if neither is set. Summary is cached on the
+  assumptions record keyed by `(rating, target_price)` so identical states
+  don't re-burn API calls.
+
+Storage: `src/user_assumptions.json` (gitignored runtime state, schema
+mirrors `user_pinned.json`):
+```json
+{ "AAPL": { "overrides": {...}, "updated_at": "...", "llm_summary": "...",
+            "llm_rating": "BUY", "llm_cache_key": "BUY::215.40" } }
+```
+
+**5. Dashboard: Assumptions panel + 📄 report column.**
+- Each expanded ticker row gets an orange-bordered Assumptions panel with
+  4 sliders. Each slider shows the trailing 6q baseline beneath it; ↺
+  resets one slider; Save & Recompute triggers POST + re-renders the
+  panel + the Top 40 PT cell; Reset-all is visual-only; Clear removes
+  the stored record entirely.
+- Top 40 PT cell gets a small orange dot when overrides exist; dot goes
+  hollow after 30 days as a staleness hint.
+- New "PDF" column at the row's end with a 📄 button. Click → fetches
+  `/report/<T>` → populates a hidden `#report-view` panel → triggers
+  `window.print()` → user "Save as PDF" from browser dialog. Print CSS
+  hides everything else so output is a clean 1-pager:
+  header · rating box · LLM summary · drivers · per-model PT breakdown ·
+  user-assumption table (only when applied) · risk flags · footer.
+
+### Anthropic key setup
+Server reads from `~/.anthropic_api_key` (chmod 600) or `$ANTHROPIC_API_KEY`.
+No restart needed when key changes — read fresh on every report call.
+Cost: ~$0.001 per uncached report (Haiku 4.5, ~200 tokens out).
+Verified live with MSFT: rating REDUCE @ -41.16% upside, 2-sentence Haiku
+narrative grounded in rubric drivers, no hallucinated facts. Cache hit on
+repeat call returns `summary_src: 'cache'`.
+
+### Verification
+- Engine smoke test: `growth_overrides=None` produces identical PT to
+  pre-v13 code; bull overrides shift PT up, bear overrides shift down.
+- MSFT bull case (rev +18%, FCF +15%, margin 50%, paydown 30%): PT moved
+  +16% from $58.84 (engine) → $68.33 (user). Plausible direction.
+- QBTS weak fundamentals (rev -7.6%/yr, FCF -49%/yr baseline): bullish
+  overrides only nudge PT $0.89 → $0.90 — engine correctly refuses to
+  rescue a structurally unprofitable name.
+- SF1 MRQ filter on AAPL: 41 clean quarters, latest 2026-03-28, revenue
+  tail shows expected seasonal pattern (Q4 high → Q1 dip).
+
+### Reuse hooks
+`fundamentals_lookup.fetch_fundamentals()` returns kwargs in the exact
+shape `compute_target_price()` accepts, so any future caller (custom
+backtests, what-if scenarios, the planned PM-agent replication phase)
+can do `compute_target_price(**fetch_fundamentals(t), last_price=px)`
+without re-implementing the SF1 lookup.
 
 ---
 

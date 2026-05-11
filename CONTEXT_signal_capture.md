@@ -1,6 +1,6 @@
 # RCG Signal Capture — CONTEXT
-**Last updated:** 2026-05-07
-**Status:** Phase 2A Sessions 1–4 complete; Session 5 (shadow observation) ongoing; Live Trading dashboard + predictions capture live; Phase A/B (forward returns + per-ticker drill-down) shipped; Model Tournament v12 live with 10 entrants + user-pinned ("starred"/ad-hoc) ticker system
+**Last updated:** 2026-05-11
+**Status:** Phase 2A Sessions 1–4 complete; Session 5 (shadow observation) ongoing; Live Trading dashboard + predictions capture live; Phase A/B (forward returns + per-ticker drill-down) shipped; Model Tournament v12 live (10 entrants + user-pinned/ad-hoc tickers); **v13 adds per-ticker user growth-assumption overrides + 1-page valuation report with Claude Haiku 4.5 narration**.
 
 ---
 
@@ -451,6 +451,71 @@ natively.
   7/10 models scored it (3 longer-window models await more bars) →
   DELETE removed cleanly.
 
+**12. v13 — Per-ticker growth-assumption overrides + valuation report (May 11)**
+
+This is the substrate for the next phase (PM-agent replication + tournament
+expansion). Two pieces shipped together because the report builds on the
+assumption record.
+
+*Per-ticker assumptions* — user can tune 4 forward-looking inputs per ticker
+that flow directly into the PT engine's projection step:
+- `rev_growth_ann_pct`     → EV/Revenue, EV/EBITDA (via projected revenue),
+                             Emerging Growth (year-1 anchor, decay still applies for years 2-3)
+- `fcf_growth_ann_pct`     → FCF Yield model
+- `ebitda_margin_now_pct`  → EV/EBITDA (combined with rev growth to derive
+                             projected EBITDA = projected_rev × target_margin)
+- `debt_paydown_ann_pct`   → applied to latest_debt before EV calc;
+                             affects ALL models indirectly via lower EV
+
+Slider midpoints = trailing **6-quarter** OLS-slope-annualized baseline
+(`compute_growth_baseline()` in `price_targets.py`). Engine still uses
+Theil-Sen over full history as its *default* projection — overrides
+explicitly bypass that. None values fall through to engine default per-model.
+
+Storage: `src/user_assumptions.json` (gitignored, mirrors user_pinned.json shape).
+Persistent across reloads — no auto-expire; orange dot dims to "stale" after 30d.
+
+*Server endpoints* (port 8085):
+- `GET/POST/DELETE /assumptions/<TICKER>` — load, save (with range clamping),
+  clear. POST returns both engine-default PT and user-PT side-by-side.
+- `GET /assumptions` — list of tickers with stored overrides (powers the
+  orange-dot indicator pass at table-render time).
+- `GET /report/<TICKER>` — deterministic 1-page valuation rubric +
+  optional Haiku 4.5 narration. Rating logic: upside%-bucket score
+  (-3 to +3) + quality bonus + PT-source penalty (M⚠clip = -1) + gates
+  penalty → STRONG BUY / BUY / HOLD / REDUCE / SELL with confidence %.
+
+*New helper module*: `src/fundamentals_lookup.py` — `fetch_fundamentals(ticker)`
+filters SF1 to dimension='MRQ' (Most-Recent Quarterly, restated) so each row
+is a clean point-in-time quarter. The screener's longstanding mixed-dimension
+read was intentionally NOT changed (would shift every daily PT); the new
+module is used only by the server's assumptions + report endpoints.
+
+*Dashboard surfaces*:
+- Expanded detail row → orange-bordered Assumptions panel with 4 sliders,
+  per-slider baseline reset (↺), Save & Recompute, Reset-all (visual-only),
+  Clear-all (DELETE). Shows engine PT → user PT with Δ% live.
+- Top 40 PT cell → orange dot when overrides exist (hover for age/count;
+  hollow after 30 days as staleness hint).
+- New "PDF" column at the row's end. 📄 button fetches `/report/<T>`,
+  populates a hidden `#report-view` div, triggers `window.print()`. Print
+  CSS hides everything else so "Save as PDF" produces a clean 1-pager.
+
+*LLM narration setup*:
+- Server reads Anthropic API key from `~/.anthropic_api_key` (chmod 600)
+  or `$ANTHROPIC_API_KEY` env var. No restart needed on key change.
+- Model: `claude-haiku-4-5-20251001`, temp 0.1, max 200 tokens.
+- Cost: ~$0.001 per uncached report. Cache key =
+  `(rating, target_price)` — invalidates automatically when assumptions move PT.
+- Prompt grounds Haiku in the deterministic rubric drivers + forbids
+  inventing facts. Verified live with MSFT: 2 grounded sentences, no
+  hallucinations, cache hit on repeat call.
+
+*Cost discipline*: Summary is cached on the assumptions record; only
+re-narrated when (rating OR target_price) changes. The deterministic rating
+is the authoritative content of the report — the LLM only writes the prose
+layer around it.
+
 ### Pending Session 4 polish (low priority)
 - **ADC reauth** — `gcloud auth application-default login` on NixOS was attempted
   but didn't save. Not blocking anything currently; CLI auth is enough for the
@@ -485,6 +550,26 @@ natively.
        walk-forward weight rebalance scaffold (May 6–7)
 - [x] User-pinned ticker system: persistent ★ favorites + ad-hoc ticker entry
        with immediate BBG-pull side-effect (May 7)
+- [x] v13: per-ticker growth-assumption overrides (4 sliders, 6q LR baseline)
+       + 1-page valuation report (📄 button, deterministic rubric + Haiku 4.5
+       narration, client-side print-to-PDF) (May 11)
+- [ ] **Next phase per user (May 11):** exhaust quant/systematic signals in
+       the tournament first — enumerate microstructure, vol-regime, cross-
+       sectional, seasonality, sentiment-derived, cross-asset, macro
+       overlay signals. Add ~15-25 more entrants before pivoting to PM
+       agent design.
+- [ ] **After quant exhaustion:** design PM-style agent input schema
+       (style profile = factor tilts + regime preferences + concentration
+       patterns). Seed from public 13F factor decomps. Adds new
+       `run_type='agent_score'` + `agent_type` column to differentiate
+       quant vs pm_style vs discretionary in the leaderboard.
+- [ ] **Regime classifier** (6-8 regimes) + per-(agent, regime) realized
+       performance matrix → the "deterministic prediction" piece for
+       capital allocation.
+- [ ] **Capital allocator**: LLM proposes regime probability vector,
+       deterministic optimizer (mean-var / risk parity / Kelly) takes
+       (regime_probs × per-agent regime perf) → weights. Auditable.
+       Backtest before paper-trading.
 - [ ] Phase 1 ML: walk-forward weight rebalancing once 2+ weeks of (model_score,
        realized_return) pairs are captured (target: late-May 2026)
 - [ ] Phase 2 ML: logistic-regression conviction model on the captured signal
