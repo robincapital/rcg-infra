@@ -506,14 +506,122 @@ def narrate_rubric(ticker: str, rubric: dict, pt_payload: dict) -> Optional[str]
     return call_anthropic_haiku(prompt)
 
 
+def _build_trailing_series_view(f: dict) -> dict:
+    """
+    Extract the trailing 8 quarters of revenue / EBITDA / FCF / debt for
+    display in the report, plus derived per-quarter margins so the reader
+    can see the quality trajectory directly.
+    """
+    import sys
+    sys.path.insert(0, "/home/nixos/Prod/V1/src")
+    from price_targets import _lr_annualized_growth
+
+    def tail(seq, n=8):
+        return list(seq[-n:]) if seq else []
+    rev = tail(f.get("revenue_series") or [])
+    ebi = tail(f.get("ebitda_series") or [])
+    fcf = tail(f.get("fcf_series") or [])
+    dbt = tail(f.get("debt_series") or [])
+
+    # Per-quarter margins (where defined)
+    ebitda_margin = []
+    fcf_margin    = []
+    # Align by index from the END (most recent), since series can have
+    # different lengths after the _clean() filter in fundamentals_lookup
+    n = min(len(rev), max(len(ebi), len(fcf)))
+    for i in range(n):
+        r = rev[-(i+1)] if i < len(rev) else None
+        e = ebi[-(i+1)] if i < len(ebi) else None
+        c = fcf[-(i+1)] if i < len(fcf) else None
+        if r and r > 0:
+            if e is not None: ebitda_margin.append(e / r)
+            if c is not None: fcf_margin.append(c / r)
+    ebitda_margin = list(reversed(ebitda_margin))
+    fcf_margin    = list(reversed(fcf_margin))
+
+    return {
+        "revenue_8q":  rev,
+        "ebitda_8q":   ebi,
+        "fcf_8q":      fcf,
+        "debt_8q":     dbt,
+        "ebitda_margin_8q": ebitda_margin,
+        "fcf_margin_8q":    fcf_margin,
+        "trend_growth": {
+            "rev_full_lr":    round((_lr_annualized_growth(f.get("revenue_series") or []) or 0) * 100, 2),
+            "ebitda_full_lr": round((_lr_annualized_growth(f.get("ebitda_series") or []) or 0) * 100, 2),
+            "fcf_full_lr":    round((_lr_annualized_growth(f.get("fcf_series") or []) or 0) * 100, 2),
+        },
+    }
+
+
+def _sector_comparison(sector: Optional[str], pt_block: dict, f: dict) -> dict:
+    """
+    Compare the ticker's effective (trailing) multiples to the sector anchor
+    multiples used by the PT engine. Lets the reader see whether the stock
+    trades rich or cheap on each axis vs its sector peers.
+    """
+    import sys
+    sys.path.insert(0, "/home/nixos/Prod/V1/src")
+    from price_targets import _get_sector_multiples
+    sm = _get_sector_multiples(sector, 0.0425, 0.0250, apply_compression=True)
+
+    rev = f.get("revenue_series") or []
+    ebi = f.get("ebitda_series") or []
+    fcf = f.get("fcf_series") or []
+    debt = f.get("debt_series") or []
+    mkt = f.get("marketcap") or 0
+    cash = f.get("cash_on_hand") or 0
+    latest_debt = debt[-1] if debt else 0
+    ev = (mkt or 0) + latest_debt - cash
+
+    eff_ev_ebitda = (ev / (ebi[-1] * 4)) if ebi and ebi[-1] > 0 else None
+    eff_ev_rev    = (ev / (rev[-1] * 4)) if rev and rev[-1] > 0 else None
+    eff_fcf_yield = ((fcf[-1] * 4) / mkt) if fcf and fcf[-1] is not None and mkt else None
+
+    def discount(eff, anchor, higher_is_premium=True):
+        """Returns 'rich'/'cheap'/'in-line' relative to anchor."""
+        if eff is None or anchor is None or anchor == 0: return None
+        ratio = eff / anchor
+        if higher_is_premium:
+            if ratio > 1.15: return "rich"
+            if ratio < 0.85: return "cheap"
+        else:
+            if ratio > 1.15: return "cheap"   # higher fcf yield = cheaper
+            if ratio < 0.85: return "rich"
+        return "in-line"
+
+    return {
+        "sector":           sector or "_default",
+        "anchor_ev_ebitda": round(sm["ev_ebitda"], 2),
+        "anchor_ev_rev":    round(sm["ev_rev"], 2),
+        "anchor_fcf_yield": round(sm["raw"]["fcf_yield"] * 100, 2),
+        "eff_ev_ebitda":    round(eff_ev_ebitda, 2) if eff_ev_ebitda else None,
+        "eff_ev_rev":       round(eff_ev_rev, 2) if eff_ev_rev else None,
+        "eff_fcf_yield":    round(eff_fcf_yield * 100, 2) if eff_fcf_yield else None,
+        "ev_ebitda_pos":    discount(eff_ev_ebitda, sm["ev_ebitda"]),
+        "ev_rev_pos":       discount(eff_ev_rev, sm["ev_rev"]),
+        "fcf_yield_pos":    discount(eff_fcf_yield, sm["raw"]["fcf_yield"], higher_is_premium=False),
+    }
+
+
 def build_report(ticker: str) -> dict:
     """Compose the full per-ticker valuation report payload."""
+    import sys
+    sys.path.insert(0, "/home/nixos/Prod/V1/src")
+    from fundamentals_lookup import fetch_fundamentals
+
     all_a = load_assumptions()
     stored = all_a.get(ticker) or {}
     overrides = stored.get("overrides")
     pt_payload = compute_pt_payload(ticker, overrides)
     if pt_payload.get("error"):
         return {"ticker": ticker, "error": pt_payload["error"]}
+
+    f = fetch_fundamentals(ticker) or {}
+    pt_block = pt_payload.get("pt_with_overrides") or pt_payload.get("pt_engine_default") or {}
+    sector = (pt_block.get("breakdown") or {}).get("sector")
+    trailing = _build_trailing_series_view(f)
+    sector_comp = _sector_comparison(sector, pt_block, f)
 
     rubric = compute_valuation_rubric(pt_payload)
 
@@ -542,12 +650,20 @@ def build_report(ticker: str) -> dict:
                 save_assumptions(cur)
 
     return {
-        "ticker":      ticker,
-        "rubric":      rubric,
-        "pt_payload":  pt_payload,
-        "summary":     summary,
-        "summary_src": llm_used,        # 'live' | 'cache' | 'none'
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "ticker":         ticker,
+        "rubric":         rubric,
+        "pt_payload":     pt_payload,
+        "summary":        summary,
+        "summary_src":    llm_used,         # 'live' | 'cache' | 'none'
+        "trailing":       trailing,         # 8q series + derived margins
+        "sector_comp":    sector_comp,      # effective vs anchor multiples
+        "company_info":   {
+            "marketcap":   f.get("marketcap"),
+            "cash_on_hand": f.get("cash_on_hand"),
+            "n_quarters":  f.get("n_quarters"),
+            "latest_datekey": f.get("latest_datekey"),
+        },
+        "generated_at":   datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -624,17 +740,33 @@ class RefreshHandler(BaseHTTPRequestHandler):
             return
 
         if self.path == "/assumptions":
-            # List all tickers with stored overrides (for the dashboard's
-            # orange-dot indicator pass at table-render time)
+            # List all tickers with stored overrides PLUS their recomputed PT
+            # so the dashboard can replace the screener-CSV target price in
+            # the Top 40 cell without doing a per-ticker GET. The recompute
+            # is fast (parquet is lru_cached) so we just call it for each.
             try:
                 all_a = load_assumptions()
                 summary = {}
                 for t, rec in all_a.items():
                     ov = rec.get("overrides") or {}
-                    if any(v is not None for v in ov.values()):
+                    if not any(v is not None for v in ov.values()):
+                        continue
+                    try:
+                        pt_payload = compute_pt_payload(t, ov)
+                        u = (pt_payload.get("pt_with_overrides") or {})
+                        e_pt = (pt_payload.get("pt_engine_default") or {}).get("target_price")
                         summary[t] = {
-                            "updated_at":  rec.get("updated_at"),
-                            "n_overrides": sum(1 for v in ov.values() if v is not None),
+                            "updated_at":   rec.get("updated_at"),
+                            "n_overrides":  sum(1 for v in ov.values() if v is not None),
+                            "user_pt":      u.get("target_price"),
+                            "engine_pt":    e_pt,
+                            "upside_pct":   u.get("upside_pct"),
+                        }
+                    except Exception as ie:
+                        summary[t] = {
+                            "updated_at":   rec.get("updated_at"),
+                            "n_overrides":  sum(1 for v in ov.values() if v is not None),
+                            "error":        str(ie)[:120],
                         }
                 self._send_json(200, {"assumptions": summary})
             except Exception as e:

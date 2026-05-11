@@ -173,46 +173,90 @@
              font-family: inherit; line-height: 1; }
   .pdf-btn:hover { color: var(--gold); border-color: var(--gold); }
   .pdf-btn:disabled { opacity: 0.5; cursor: wait; }
+  /* RCG palette — must match rcg_report.py PDF generator */
+  :root {
+    --rcg-navy:        #0a1628;
+    --rcg-navy-light:  #111d33;
+    --rcg-navy-mid:    #0e1a2e;
+    --rcg-gold:        #c8a84e;
+    --rcg-green:       #22c55e;
+    --rcg-red:         #ef4444;
+    --rcg-text:        #e2e8f0;
+    --rcg-text-dim:    #94a3b8;
+    --rcg-border:      #1e2a44;
+  }
   #report-view { display: none; }
-  #report-view.show { display: block; position: fixed; inset: 0; background: #fff; color: #111;
-                      overflow: auto; z-index: 9999; padding: 1.5rem 2rem; font-family: Georgia, "Times New Roman", serif; }
-  .rep-header { display: flex; justify-content: space-between; align-items: baseline;
-                border-bottom: 2px solid #333; padding-bottom: 0.5rem; margin-bottom: 0.8rem; }
-  .rep-header h1 { margin: 0; font-size: 22px; color: #111; }
-  .rep-header .brand { font-size: 11px; color: #666; letter-spacing: 0.5px; text-transform: uppercase; }
-  .rep-rating { display: flex; align-items: center; gap: 1.2rem; padding: 0.6rem 0.9rem;
-                border: 2px solid #333; border-radius: 6px; margin-bottom: 0.7rem; }
-  .rep-rating .label { font-size: 22px; font-weight: bold; letter-spacing: 1px; padding: 4px 14px;
-                       border-radius: 4px; }
-  .rep-rating .label.buy   { background: #1a7f1a; color: #fff; }
-  .rep-rating .label.hold  { background: #f4c542; color: #111; }
-  .rep-rating .label.sell  { background: #b03030; color: #fff; }
-  .rep-rating .targets { font-family: monospace; font-size: 13px; }
-  .rep-rating .targets b { font-size: 16px; }
-  .rep-rating .conf { color: #666; font-size: 11px; margin-left: auto; }
-  .rep-summary { background: #f5f5f0; border-left: 3px solid #666; padding: 0.5rem 0.7rem;
-                 font-size: 13px; font-style: italic; margin-bottom: 0.7rem; }
-  .rep-section { margin-bottom: 0.6rem; }
-  .rep-section h3 { margin: 0 0 0.2rem 0; font-size: 11px; color: #555; text-transform: uppercase;
-                    letter-spacing: 0.6px; border-bottom: 1px solid #ccc; padding-bottom: 2px; }
-  .rep-section table { width: 100%; border-collapse: collapse; font-size: 11px; font-family: monospace; }
-  .rep-section th { text-align: left; padding: 3px 6px; background: #f0f0e8; color: #333; }
-  .rep-section td { padding: 3px 6px; border-bottom: 1px solid #eee; }
-  .rep-section td.r { text-align: right; }
-  .rep-bullets { font-size: 12px; padding-left: 1.2rem; margin: 0.2rem 0; }
-  .rep-bullets li { margin: 2px 0; }
-  .rep-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
-  .rep-footer { margin-top: 1rem; padding-top: 0.4rem; border-top: 1px solid #ccc;
-                font-size: 9px; color: #888; text-align: center; }
-  .rep-close { position: fixed; top: 10px; right: 14px; background: #b03030; color: #fff;
-               border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer;
-               font-family: inherit; font-size: 12px; }
+  #report-view.show { display: block; position: fixed; inset: 0; background: var(--rcg-navy); color: var(--rcg-text);
+                      overflow: auto; z-index: 9999; padding: 0; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
+  #rep-body { max-width: 8.5in; margin: 0 auto; padding: 18px 28px 14px; background: var(--rcg-navy); }
+  .rep-header { display: flex; justify-content: space-between; align-items: flex-start;
+                background: var(--rcg-navy-light); border-bottom: 2px solid var(--rcg-gold);
+                padding: 12px 14px; margin: -18px -28px 12px; }
+  .rep-header .left h1 { margin: 0; font-size: 16px; color: var(--rcg-gold); font-weight: bold; letter-spacing: 0.3px; }
+  .rep-header .left .brand { font-size: 9px; color: var(--rcg-text-dim); letter-spacing: 0.6px;
+                              text-transform: uppercase; margin-top: 3px; }
+  .rep-header .right { text-align: right; }
+  .rep-header .right .tkr { font-size: 28px; color: var(--rcg-gold); font-weight: bold; line-height: 1; }
+  .rep-header .right .name { font-size: 9px; color: var(--rcg-text-dim); margin-top: 4px; }
+  .rep-header .right .sect { font-size: 8px; color: var(--rcg-text-dim); margin-top: 1px; }
+  .rep-rec { display: flex; align-items: center; gap: 14px; padding: 8px 12px;
+             border: 1px solid var(--rcg-border); border-radius: 4px; margin-bottom: 8px;
+             background: var(--rcg-navy-mid); }
+  .rep-rec.buy   { background: #0f3d1e; border-color: var(--rcg-green); }
+  .rep-rec.hold  { background: #3d3310; border-color: var(--rcg-gold); }
+  .rep-rec.sell  { background: #3d0f0f; border-color: var(--rcg-red); }
+  .rep-rec .label { font-size: 18px; font-weight: bold; letter-spacing: 1px; padding: 2px 10px;
+                    border-radius: 3px; color: #fff; }
+  .rep-rec .label.buy  { background: var(--rcg-green); color: #052010; }
+  .rep-rec .label.hold { background: var(--rcg-gold); color: #1a1500; }
+  .rep-rec .label.sell { background: var(--rcg-red); color: #fff; }
+  .rep-rec .px-line { font-family: monospace; font-size: 12px; color: var(--rcg-text); }
+  .rep-rec .px-line b { color: var(--rcg-gold); font-size: 14px; }
+  .rep-rec .conf { font-size: 9px; color: var(--rcg-text-dim); margin-left: auto; }
+  .rep-summary { background: var(--rcg-navy-light); border-left: 3px solid var(--rcg-gold);
+                 padding: 7px 11px; font-size: 11px; line-height: 1.45;
+                 margin-bottom: 9px; color: var(--rcg-text); font-style: italic; }
+  .rep-grid-3 { display: grid; grid-template-columns: 1.1fr 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+  .rep-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+  .rep-card { background: var(--rcg-navy-light); border: 1px solid var(--rcg-border); border-radius: 3px;
+              padding: 6px 9px; }
+  .rep-card h3 { margin: 0 0 4px 0; font-size: 9px; color: var(--rcg-gold); text-transform: uppercase;
+                 letter-spacing: 0.7px; padding-bottom: 3px; border-bottom: 1px solid var(--rcg-border); }
+  .rep-card table { width: 100%; border-collapse: collapse; font-size: 10px;
+                    font-family: ui-monospace, "SF Mono", Consolas, monospace; color: var(--rcg-text); }
+  .rep-card th { text-align: left; padding: 2px 4px; color: var(--rcg-text-dim); font-weight: normal;
+                 font-size: 9px; text-transform: uppercase; letter-spacing: 0.3px;
+                 border-bottom: 1px solid var(--rcg-border); }
+  .rep-card td { padding: 2px 4px; border-bottom: 1px solid rgba(30,42,68,0.5); }
+  .rep-card td.r { text-align: right; }
+  .rep-card td.dim { color: var(--rcg-text-dim); }
+  .rep-card td.gold { color: var(--rcg-gold); }
+  .rep-card td.green { color: var(--rcg-green); }
+  .rep-card td.red { color: var(--rcg-red); }
+  .rep-card .nodata { font-size: 10px; color: var(--rcg-text-dim); padding: 3px 0; }
+  .rep-bullets { font-size: 10.5px; padding-left: 16px; margin: 2px 0; color: var(--rcg-text); }
+  .rep-bullets li { margin: 1px 0; }
+  .rep-spark { display: flex; align-items: flex-end; gap: 1px; height: 18px; }
+  .rep-spark .b { flex: 1; background: var(--rcg-gold); opacity: 0.7; min-height: 1px; border-radius: 1px; }
+  .rep-spark .b.neg { background: var(--rcg-red); }
+  .pos-rich { color: var(--rcg-red); font-weight: bold; }
+  .pos-cheap { color: var(--rcg-green); font-weight: bold; }
+  .pos-inline { color: var(--rcg-text-dim); }
+  .rep-footer { margin-top: 10px; padding-top: 6px; border-top: 1px solid var(--rcg-border);
+                font-size: 8px; color: var(--rcg-text-dim); text-align: center; line-height: 1.4; }
+  .rep-close { position: fixed; top: 8px; right: 14px; background: var(--rcg-red); color: #fff;
+               border: none; padding: 5px 12px; border-radius: 3px; cursor: pointer;
+               font-family: inherit; font-size: 11px; z-index: 10000; }
   @media print {
     body > *:not(#report-view) { display: none !important; }
-    #report-view { display: block !important; position: static !important; padding: 0 !important; }
+    #report-view { display: block !important; position: static !important; }
+    #report-view.show { background: var(--rcg-navy) !important; }
     .rep-close { display: none !important; }
-    .rep-header { border-bottom-width: 1px; }
-    @page { margin: 0.5in; size: letter; }
+    #rep-body { padding: 6px 12px !important; }
+    .rep-header { margin: -6px -12px 8px !important; }
+    @page { margin: 0.35in; size: letter; }
+    /* Force colors to print */
+    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
   }
   .gate-tag { display: inline-block; background: var(--panel); border: 1px solid var(--border); color: var(--dim);
               padding: 1px 6px; border-radius: 3px; margin: 1px 2px; font-size: 10px; font-family: monospace; }
@@ -709,7 +753,14 @@
       const now = Date.now();
       for (const [t, rec] of Object.entries(summary)) {
         const ageDays = rec.updated_at ? Math.floor((now - new Date(rec.updated_at).getTime()) / 86400000) : 0;
-        m.set(t, { updated_at: rec.updated_at, n_overrides: rec.n_overrides, ageDays });
+        m.set(t, {
+          updated_at:  rec.updated_at,
+          n_overrides: rec.n_overrides,
+          ageDays,
+          user_pt:     rec.user_pt,
+          engine_pt:   rec.engine_pt,
+          upside_pct:  rec.upside_pct,
+        });
       }
       assumptionsMap = m;
     } catch (e) { console.warn('[assumptions] load failed:', e); }
@@ -894,9 +945,29 @@
     return 'hold';
   }
   function fmtPtCell(v) { return v == null ? '—' : '$' + (+v).toFixed(2); }
+  // ─── Report HTML builder — RCG navy/gold theme matching rcg_report.py PDF ───
+  function fmtMoneyShort(v) {
+    if (v == null) return '—';
+    const abs = Math.abs(v);
+    if (abs >= 1e9) return '$' + (v/1e9).toFixed(1) + 'B';
+    if (abs >= 1e6) return '$' + (v/1e6).toFixed(0) + 'M';
+    if (abs >= 1e3) return '$' + (v/1e3).toFixed(0) + 'k';
+    return '$' + v.toFixed(2);
+  }
+  function sparkSvg(series, opts = {}) {
+    if (!series || series.length < 2) return '<div class="rep-spark"></div>';
+    const vals = series.map(v => Number(v) || 0);
+    const max  = Math.max(...vals.map(Math.abs));
+    if (max === 0) return '<div class="rep-spark"></div>';
+    return '<div class="rep-spark">' + vals.map(v => {
+      const h = Math.max(1, (Math.abs(v) / max) * 18);
+      const cls = v < 0 ? 'b neg' : 'b';
+      return `<span class="${cls}" style="height:${h}px" title="${v}"></span>`;
+    }).join('') + '</div>';
+  }
   function buildReportHtml(rep) {
     if (rep.error) {
-      return `<div style="padding:1rem;color:#b03030">Report unavailable: ${rep.error}</div>`;
+      return `<div style="padding:1rem;color:var(--rcg-red)">Report unavailable: ${rep.error}</div>`;
     }
     const t       = rep.ticker;
     const rub     = rep.rubric || {};
@@ -909,95 +980,167 @@
     const ov      = pp.overrides || {};
     const base    = pp.baseline || {};
     const hasUserPT = !!usr;
+    const ci      = rep.company_info || {};
+    const tr      = rep.trailing || {};
+    const sc      = rep.sector_comp || {};
     const summary = rep.summary || (
       rep.summary_src === 'none'
-        ? `Narrative summary unavailable: no ANTHROPIC_API_KEY configured on the server. `
-        + `The deterministic rating + drivers below are the authoritative content of this report.`
+        ? `Narrative summary unavailable — set ANTHROPIC_API_KEY on the server to enable Claude Haiku 4.5 narration. The deterministic rating + drivers below remain the authoritative content of this report.`
         : '');
+    const ratingCls = ratingClass(rub.rating);
+    const sector    = (eng.breakdown || {}).sector || 'Sector n/a';
+    // Trailing quarterly series with derived margins for the fundamentals table
+    const rev8  = tr.revenue_8q  || [];
+    const ebi8  = tr.ebitda_8q   || [];
+    const fcf8  = tr.fcf_8q      || [];
+    const debt8 = tr.debt_8q     || [];
+    const em8   = tr.ebitda_margin_8q || [];
+    const fm8   = tr.fcf_margin_8q    || [];
+    const tg    = tr.trend_growth     || {};
+    const latestRev    = rev8[rev8.length-1];
+    const latestEbitda = ebi8[ebi8.length-1];
+    const latestFcf    = fcf8[fcf8.length-1];
+    const latestDebt   = debt8[debt8.length-1];
+    const latestEm     = em8[em8.length-1];
+    const latestFm     = fm8[fm8.length-1];
     // Per-model PT breakdown
     const models  = (eng.breakdown || {}).models || {};
     const cw      = (eng.breakdown || {}).conviction_weights || {};
-    const modelRows = Object.entries(models).map(([name, m]) => `
-      <tr>
-        <td>${name}${(eng.breakdown||{}).dominant_model === name ? ' ★' : ''}</td>
+    const userModels = (usr?.breakdown || {}).models || {};
+    const modelRows = Object.entries(models).map(([name, m]) => {
+      const um = userModels[name] || {};
+      const userPt = hasUserPT ? um.pt : null;
+      const dom = (eng.breakdown||{}).dominant_model === name;
+      return `<tr>
+        <td>${name}${dom ? ' <span class="gold">★</span>' : ''}</td>
         <td class="r">${fmtPtCell(m.pt)}</td>
-        <td class="r">${m.r2 ?? '—'}</td>
-        <td class="r">${m.conviction ?? '—'}</td>
-        <td class="r">${cw[name] != null ? (+cw[name]).toFixed(3) : '—'}</td>
-        <td>${m.applied_cap || ''}</td>
-      </tr>`).join('');
+        <td class="r gold">${hasUserPT ? fmtPtCell(userPt) : ''}</td>
+        <td class="r dim">${(m.r2 != null) ? (+m.r2).toFixed(2) : '—'}</td>
+        <td class="r dim">${(m.conviction != null) ? (+m.conviction).toFixed(2) : '—'}</td>
+        <td class="r dim">${cw[name] != null ? (+cw[name]).toFixed(2) : '—'}</td>
+        <td class="dim">${m.applied_cap || ''}</td>
+      </tr>`;
+    }).join('');
     // User assumptions table
     const KEY_LABEL = {
       'rev_growth_ann_pct':    'Revenue growth (%/yr)',
       'fcf_growth_ann_pct':    'FCF growth (%/yr)',
-      'ebitda_margin_now_pct': 'EBITDA margin (%)',
+      'ebitda_margin_now_pct': 'EBITDA margin target (%)',
       'debt_paydown_ann_pct':  'Net-debt paydown (%/yr)',
     };
     const overrideRows = Object.entries(KEY_LABEL).map(([k, lbl]) => {
       const b = base[k]; const u = ov[k];
-      if (u == null) return ''; // only show keys the user overrode
+      if (u == null) return '';
+      const delta = (b != null) ? (u - b) : null;
+      const dCls = delta == null ? 'dim' : (delta >= 0 ? 'green' : 'red');
       return `<tr>
         <td>${lbl}</td>
-        <td class="r">${b == null ? '—' : (+b).toFixed(1)}</td>
-        <td class="r" style="color:#b46c00;font-weight:bold">${(+u).toFixed(1)}</td>
-        <td class="r" style="color:#b46c00">${b == null ? '' : ((u-b) >= 0 ? '+' : '') + (u-b).toFixed(1)}</td>
+        <td class="r dim">${b == null ? '—' : (+b).toFixed(1)}</td>
+        <td class="r gold"><b>${(+u).toFixed(1)}</b></td>
+        <td class="r ${dCls}">${delta == null ? '' : ((delta >= 0 ? '+' : '') + delta.toFixed(1))}</td>
       </tr>`;
     }).join('');
-    const assumptionsBlock = overrideRows
-      ? `<div class="rep-section"><h3>User assumptions applied (vs trailing 6q baseline)</h3>
+    const assumptionsCard = overrideRows
+      ? `<div class="rep-card">
+           <h3>User Assumptions Applied · vs trailing 6q baseline</h3>
            <table>
-             <thead><tr><th>Input</th><th class="r">Baseline 6q</th><th class="r">User value</th><th class="r">Δ</th></tr></thead>
+             <thead><tr><th>Input</th><th class="r">Base 6q</th><th class="r">User</th><th class="r">Δ</th></tr></thead>
              <tbody>${overrideRows}</tbody>
            </table>
-           <div style="font-size:9px;color:#888;margin-top:3px">Updated ${(pp.updated_at||'').slice(0,10) || '—'}</div>
+           <div style="font-size:8px;color:var(--rcg-text-dim);margin-top:3px">Saved ${(pp.updated_at||'').slice(0,10) || '—'}</div>
          </div>`
-      : `<div class="rep-section"><h3>Assumptions</h3>
-           <div style="font-size:11px;color:#666">Engine defaults — no user overrides applied to this ticker.</div></div>`;
+      : '';
+    // Sector comparison — effective vs anchor multiples
+    function posBadge(p) {
+      if (!p) return '<span class="dim">—</span>';
+      if (p === 'rich')  return '<span class="pos-rich">RICH</span>';
+      if (p === 'cheap') return '<span class="pos-cheap">CHEAP</span>';
+      return '<span class="pos-inline">in-line</span>';
+    }
+    const secCard = `
+      <div class="rep-card">
+        <h3>Sector Valuation · ${sc.sector || sector}</h3>
+        <table>
+          <thead><tr><th>Multiple</th><th class="r">Effective</th><th class="r">Sector</th><th class="r">vs Peers</th></tr></thead>
+          <tbody>
+            <tr><td>EV / EBITDA</td><td class="r gold">${sc.eff_ev_ebitda ?? '—'}x</td><td class="r dim">${sc.anchor_ev_ebitda ?? '—'}x</td><td class="r">${posBadge(sc.ev_ebitda_pos)}</td></tr>
+            <tr><td>EV / Revenue</td><td class="r gold">${sc.eff_ev_rev ?? '—'}x</td><td class="r dim">${sc.anchor_ev_rev ?? '—'}x</td><td class="r">${posBadge(sc.ev_rev_pos)}</td></tr>
+            <tr><td>FCF yield</td><td class="r gold">${sc.eff_fcf_yield ?? '—'}%</td><td class="r dim">${sc.anchor_fcf_yield ?? '—'}%</td><td class="r">${posBadge(sc.fcf_yield_pos)}</td></tr>
+          </tbody>
+        </table>
+      </div>`;
+    // Trailing 8q fundamentals card
+    const fundCard = `
+      <div class="rep-card">
+        <h3>Trailing Fundamentals · last 8q</h3>
+        <table>
+          <thead><tr><th>Metric</th><th class="r">Latest</th><th>Trend</th><th class="r">Full-LR %/yr</th></tr></thead>
+          <tbody>
+            <tr><td>Revenue</td><td class="r gold">${fmtMoneyShort(latestRev)}</td><td>${sparkSvg(rev8)}</td><td class="r dim">${tg.rev_full_lr != null ? (tg.rev_full_lr >= 0 ? '+' : '') + tg.rev_full_lr.toFixed(1) + '%' : '—'}</td></tr>
+            <tr><td>EBITDA</td><td class="r gold">${fmtMoneyShort(latestEbitda)}</td><td>${sparkSvg(ebi8)}</td><td class="r dim">${tg.ebitda_full_lr != null ? (tg.ebitda_full_lr >= 0 ? '+' : '') + tg.ebitda_full_lr.toFixed(1) + '%' : '—'}</td></tr>
+            <tr><td>Free Cash Flow</td><td class="r gold">${fmtMoneyShort(latestFcf)}</td><td>${sparkSvg(fcf8)}</td><td class="r dim">${tg.fcf_full_lr != null ? (tg.fcf_full_lr >= 0 ? '+' : '') + tg.fcf_full_lr.toFixed(1) + '%' : '—'}</td></tr>
+            <tr><td>Total Debt</td><td class="r gold">${fmtMoneyShort(latestDebt)}</td><td>${sparkSvg(debt8)}</td><td class="r dim"></td></tr>
+            <tr><td>EBITDA margin</td><td class="r gold">${latestEm != null ? (latestEm*100).toFixed(1) + '%' : '—'}</td><td>${sparkSvg(em8)}</td><td class="r dim"></td></tr>
+            <tr><td>FCF margin</td><td class="r gold">${latestFm != null ? (latestFm*100).toFixed(1) + '%' : '—'}</td><td>${sparkSvg(fm8)}</td><td class="r dim"></td></tr>
+          </tbody>
+        </table>
+      </div>`;
     // Gates / risk
     const gates = eng.gates_fired || [];
-    const riskBlock = gates.length
-      ? `<ul class="rep-bullets">${gates.map(g => `<li>${g}</li>`).join('')}</ul>`
-      : `<div style="font-size:11px;color:#666">No model gates fired — all 4 PT models cleared the R² floor.</div>`;
+    const riskItems = gates.length
+      ? gates.map(g => `<li>${g}</li>`).join('')
+      : '<li class="dim">No model gates fired — all 4 PT models cleared the R² floor.</li>';
     // Drivers
     const driverRows = (rub.drivers || []).map(d => `<li>${d}</li>`).join('');
     return `
       <div class="rep-header">
-        <h1>${t} <span style="font-size:12px;color:#666;font-weight:normal">· ${(eng.breakdown||{}).sector || 'Sector n/a'}</span></h1>
-        <div class="brand">RCG Alpha Engine · Valuation Report · ${new Date().toLocaleDateString()}</div>
+        <div class="left">
+          <h1>Investment Analysis Report</h1>
+          <div class="brand">Robin Capital Group LLC &nbsp;|&nbsp; ${new Date().toLocaleDateString('en-US', {year:'numeric', month:'long', day:'numeric'})}</div>
+        </div>
+        <div class="right">
+          <div class="tkr">${t}</div>
+          <div class="sect">${sector}</div>
+          <div class="name">Mkt cap ${fmtMoneyShort(ci.marketcap)} &nbsp;·&nbsp; ${ci.n_quarters || '?'}q SF1 history</div>
+        </div>
       </div>
-      <div class="rep-rating">
-        <span class="label ${ratingClass(rub.rating)}">${rub.rating || 'HOLD'}</span>
-        <div class="targets">
-          <div>Live: ${fmtPtCell(livePx)} → Target: <b>${fmtPtCell(pt)}</b>
-            <span style="color:${(upside||0) >= 0 ? '#1a7f1a' : '#b03030'}">${upside == null ? '' : (upside >= 0 ? '+' : '') + upside.toFixed(1) + '%'}</span>
-          </div>
-          <div style="font-size:11px;color:#666">PT source: ${rub.pt_source || 'N/A'} · Quality ${(rub.quality != null) ? (+rub.quality).toFixed(2) : '—'}${hasUserPT ? ' · USER ASSUMPTIONS APPLIED' : ''}</div>
+      <div class="rep-rec ${ratingCls}">
+        <span class="label ${ratingCls}">${rub.rating || 'HOLD'}</span>
+        <div class="px-line">
+          Live: <b>${fmtPtCell(livePx)}</b>
+          &nbsp;→&nbsp; Target: <b>${fmtPtCell(pt)}</b>
+          &nbsp;<span style="color:${(upside||0) >= 0 ? 'var(--rcg-green)' : 'var(--rcg-red)'}">${upside == null ? '' : (upside >= 0 ? '+' : '') + upside.toFixed(1) + '%'}</span>
+          &nbsp;<span style="color:var(--rcg-text-dim);font-size:10px">PT source ${rub.pt_source || 'N/A'} · Quality ${(rub.quality != null) ? (+rub.quality).toFixed(2) : '—'}${hasUserPT ? ' · USER ASSUMPTIONS' : ''}</span>
         </div>
         <span class="conf">Conf ${((rub.confidence||0) * 100).toFixed(0)}%</span>
       </div>
       <div class="rep-summary">${summary || '<em>(narrative pending)</em>'}</div>
-      <div class="rep-grid">
-        <div>
-          <div class="rep-section"><h3>Rating drivers</h3>
-            <ul class="rep-bullets">${driverRows}</ul>
-          </div>
-          ${assumptionsBlock}
+      <div class="rep-grid-2">
+        ${fundCard}
+        ${secCard}
+      </div>
+      <div class="rep-grid-2">
+        <div class="rep-card">
+          <h3>Rating Drivers</h3>
+          <ul class="rep-bullets">${driverRows}</ul>
         </div>
-        <div>
-          <div class="rep-section"><h3>Per-model PT breakdown</h3>
-            <table>
-              <thead><tr><th>Model</th><th class="r">PT</th><th class="r">R²</th><th class="r">Conv</th><th class="r">Weight</th><th>Cap</th></tr></thead>
-              <tbody>${modelRows || '<tr><td colspan="6" style="color:#888">No models qualified</td></tr>'}</tbody>
-            </table>
-          </div>
-          <div class="rep-section"><h3>Risk flags / gates fired</h3>${riskBlock}</div>
+        <div class="rep-card">
+          <h3>Per-Model Price Target Breakdown</h3>
+          <table>
+            <thead><tr><th>Model</th><th class="r">Engine PT</th><th class="r">User PT</th><th class="r">R²</th><th class="r">Conv</th><th class="r">Wt</th><th>Cap</th></tr></thead>
+            <tbody>${modelRows || '<tr><td colspan="7" class="dim">No models qualified</td></tr>'}</tbody>
+          </table>
         </div>
       </div>
+      ${assumptionsCard ? `<div class="rep-grid-2">${assumptionsCard}<div class="rep-card"><h3>Risk Flags / Gates Fired</h3><ul class="rep-bullets">${riskItems}</ul></div></div>` :
+        `<div class="rep-card"><h3>Risk Flags / Gates Fired</h3><ul class="rep-bullets">${riskItems}</ul></div>`}
       <div class="rep-footer">
-        ${pp.n_quarters || '?'} quarters of SF1 data · latest report period ${pp.latest_datekey || '?'} ·
-        narrative source: ${rep.summary_src || 'none'} ·
+        ${pp.n_quarters || '?'} quarters of Sharadar SF1 (MRQ, restated) &nbsp;·&nbsp;
+        latest period ${pp.latest_datekey || '?'} &nbsp;·&nbsp;
+        narrative source: ${rep.summary_src || 'none'} &nbsp;·&nbsp;
         generated ${rep.generated_at ? rep.generated_at.slice(0,19).replace('T',' ') + ' UTC' : ''}
-        <br>RCG Alpha Engine — for research use only. Not investment advice.
+        <br>RCG Alpha Engine · multi-model conviction-weighted price targets with deterministic rating rubric.
+        &nbsp;·&nbsp; For research use only. Not investment advice.
       </div>
     `;
   }
@@ -1019,12 +1162,18 @@
     }
   }
   function closeReport() {
-    document.getElementById('report-view').classList.remove('show');
+    const v = document.getElementById('report-view');
+    if (v) v.classList.remove('show');
   }
-  document.getElementById('rep-close').addEventListener('click', closeReport);
+  // Use event delegation on document so we don't depend on #rep-close existing
+  // at script-execution time (the report-view div is parsed AFTER this script).
+  document.addEventListener('click', (e) => {
+    if (e.target && e.target.id === 'rep-close') closeReport();
+  });
   // Esc also closes
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && document.getElementById('report-view').classList.contains('show')) {
+    const v = document.getElementById('report-view');
+    if (e.key === 'Escape' && v && v.classList.contains('show')) {
       closeReport();
     }
   });
@@ -2261,7 +2410,18 @@
       else if (ss <= -65) predCls += ' bear-strong';
       else if (ss <= -25) predCls += ' bear';
       const predDisp = (ss >= 0 ? '+' : '') + ss;
-      const upsideCls = moveClass(m.upsidePct);
+      // ── Apply user-assumption override to displayed PT + upside (if stored) ──
+      // The recompute happens server-side and is returned in /assumptions list;
+      // we just thread it into the cell here. Tooltip shows the engine baseline.
+      const aRec = assumptionsMap.get(m.ticker);
+      const userPT     = aRec?.user_pt;
+      const enginePT   = m.targetPx;
+      const displayPT  = (userPT != null) ? userPT : enginePT;
+      const displayUps = (userPT != null && m.livePx) ? ((userPT - m.livePx) / m.livePx) : m.upsidePct;
+      const upsideCls  = moveClass(displayUps);
+      const ptTitle    = (userPT != null && enginePT != null)
+        ? `User assumptions PT $${userPT.toFixed(2)}\n(engine default would be $${enginePT.toFixed(2)})`
+        : '';
       html.push(`
         <tr>
           <td class="neutral">${m.rank ?? i+1}</td>
@@ -2271,8 +2431,8 @@
           <td class="neutral">${fmtPx(m.eod)}</td>
           <td>${fmtPx(m.livePx)}</td>
           <td class="${moveClass(m.move)}">${fmtPct(m.move)}</td>
-          <td class="neutral ${assumptionsMap.has(m.ticker) ? 'pt-user-overridden' : ''}">${assumptionDot(m.ticker)}${fmtPx(m.targetPx)}</td>
-          <td class="${upsideCls}">${fmtPct(m.upsidePct)}</td>
+          <td class="neutral ${userPT != null ? 'pt-user-overridden' : ''}" title="${ptTitle}">${assumptionDot(m.ticker)}${fmtPx(displayPT)}</td>
+          <td class="${upsideCls}">${fmtPct(displayUps)}</td>
           <td>${m.rsi == null ? '—' : m.rsi.toFixed(0)}</td>
           <td>${m.volRatio == null ? '—' : m.volRatio.toFixed(2)+'x'}</td>
           <td class="${predCls}">${predDisp}</td>
