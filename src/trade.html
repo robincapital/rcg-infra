@@ -247,15 +247,34 @@
   .rep-close { position: fixed; top: 8px; right: 14px; background: var(--rcg-red); color: #fff;
                border: none; padding: 5px 12px; border-radius: 3px; cursor: pointer;
                font-family: inherit; font-size: 11px; z-index: 10000; }
+  .rep-print-hint { background: #c8a84e; color: #1a1500; padding: 4px 10px; font-size: 10px;
+                    text-align: center; margin: -18px -28px 8px; font-weight: bold; }
   @media print {
     body > *:not(#report-view) { display: none !important; }
-    #report-view { display: block !important; position: static !important; }
-    #report-view.show { background: var(--rcg-navy) !important; }
-    .rep-close { display: none !important; }
-    #rep-body { padding: 6px 12px !important; }
-    .rep-header { margin: -6px -12px 8px !important; }
-    @page { margin: 0.35in; size: letter; }
-    /* Force colors to print */
+    #report-view, #report-view.show { display: block !important; position: static !important;
+                                       background: #0a1628 !important; }
+    html, body { background: #0a1628 !important; }
+    .rep-close, .rep-print-hint { display: none !important; }
+    #rep-body { padding: 6px 12px !important; background: #0a1628 !important; color: #e2e8f0 !important; }
+    .rep-header { margin: -6px -12px 8px !important; background: #111d33 !important; }
+    .rep-header .left h1, .rep-header .right .tkr { color: #c8a84e !important; }
+    .rep-card { background: #111d33 !important; border-color: #1e2a44 !important; }
+    .rep-card h3 { color: #c8a84e !important; }
+    .rep-summary { background: #111d33 !important; color: #e2e8f0 !important; border-left-color: #c8a84e !important; }
+    .rep-rec.buy   { background: #0f3d1e !important; }
+    .rep-rec.hold  { background: #3d3310 !important; }
+    .rep-rec.sell  { background: #3d0f0f !important; }
+    .rep-rec .label.buy  { background: #22c55e !important; color: #052010 !important; }
+    .rep-rec .label.hold { background: #c8a84e !important; color: #1a1500 !important; }
+    .rep-rec .label.sell { background: #ef4444 !important; color: #fff !important; }
+    .rep-spark .b { background: #c8a84e !important; }
+    .rep-spark .b.neg { background: #ef4444 !important; }
+    .gold { color: #c8a84e !important; }
+    .green { color: #22c55e !important; }
+    .red { color: #ef4444 !important; }
+    .pos-rich { color: #ef4444 !important; }
+    .pos-cheap { color: #22c55e !important; }
+    @page { margin: 0.35in; size: letter; background: #0a1628; }
     * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
   }
   .gate-tag { display: inline-block; background: var(--panel); border: 1px solid var(--border); color: var(--dim);
@@ -838,8 +857,15 @@
       <div class="assumption-pt-summary">${summary}</div>
       <div class="assumption-actions">
         <button class="primary" data-action="save">Save & Recompute</button>
-        <button data-action="reset-all">Reset all to baseline</button>
-        <button data-action="clear">Clear all overrides</button>
+        <button data-action="preset-bull"  title="Bull case: rev/EBITDA/FCF all +50% above 6q baseline, debt paydown 30%/yr">Bull preset</button>
+        <button data-action="preset-bear"  title="Bear case: rev/EBITDA/FCF all -30% below 6q baseline, no debt paydown">Bear preset</button>
+        <button data-action="reset-all">Reset to baseline</button>
+        <button data-action="clear">Clear overrides</button>
+      </div>
+      <div style="margin-top:6px;font-size:9px;color:var(--dim);line-height:1.4">
+        Tip: PT engine projects 4 quarters forward. To see large PT moves, push multiple inputs together
+        (rev + margin + FCF + paydown), not just one. Sector multiple ceilings cap any single input from
+        running away.
       </div>`;
 
     // Wire slider input → live value display
@@ -910,6 +936,35 @@
         d.classList.remove('user-set');
       });
     });
+    // Coherent preset: bull case (rev/EBITDA/FCF +50% over baseline, +30%/yr debt paydown)
+    // Bear case is the mirror image. These move ALL sliders together — the only way
+    // to see truly dramatic PT shifts since each input alone is conviction-blended.
+    function applyPreset(mult, paydown) {
+      ASSUMPTION_INPUTS.forEach(inp => {
+        const b = base[inp.key];
+        if (b == null) return;
+        let v;
+        if (inp.key === 'debt_paydown_ann_pct') v = paydown;
+        else if (inp.key === 'ebitda_margin_now_pct') {
+          // Margin: bull = baseline + 5pp, bear = baseline - 5pp
+          v = b + (mult >= 1 ? 5 : -5);
+        } else {
+          // Growth metrics: scale by mult (1.5 = bull, 0.7 = bear). Add/subtract
+          // floor when baseline is near zero so we still get a meaningful shift.
+          v = (b >= 0 ? b * mult : b * (2 - mult));
+          if (Math.abs(v - b) < 3) v = b + (mult >= 1 ? 5 : -5);
+        }
+        // Clamp to slider range
+        v = Math.max(inp.min, Math.min(inp.max, v));
+        const i = el.querySelector(`[data-input="${inp.key}"]`);
+        const d = el.querySelector(`[data-display="${inp.key}"]`);
+        i.value = v;
+        d.textContent = (+v).toFixed(1) + inp.unit;
+        d.classList.add('user-set');
+      });
+    }
+    el.querySelector('[data-action="preset-bull"]').addEventListener('click', () => applyPreset(1.5, 30));
+    el.querySelector('[data-action="preset-bear"]').addEventListener('click', () => applyPreset(0.7, 0));
     // Clear all stored overrides via DELETE
     el.querySelector('[data-action="clear"]').addEventListener('click', () => clearAssumptions(ticker, el));
   }
@@ -994,6 +1049,7 @@
     const ebi8  = tr.ebitda_8q   || [];
     const fcf8  = tr.fcf_8q      || [];
     const debt8 = tr.debt_8q     || [];
+    const eps8  = tr.eps_8q      || [];
     const em8   = tr.ebitda_margin_8q || [];
     const fm8   = tr.fcf_margin_8q    || [];
     const tg    = tr.trend_growth     || {};
@@ -1003,6 +1059,9 @@
     const latestDebt   = debt8[debt8.length-1];
     const latestEm     = em8[em8.length-1];
     const latestFm     = fm8[fm8.length-1];
+    const latestEps    = eps8[eps8.length-1];
+    const epsTtm       = tr.eps_ttm;
+    const cat          = rep.catalysts || {};
     // Per-model PT breakdown
     const models  = (eng.breakdown || {}).models || {};
     const cw      = (eng.breakdown || {}).conviction_weights || {};
@@ -1079,6 +1138,7 @@
             <tr><td>Revenue</td><td class="r gold">${fmtMoneyShort(latestRev)}</td><td>${sparkSvg(rev8)}</td><td class="r dim">${tg.rev_full_lr != null ? (tg.rev_full_lr >= 0 ? '+' : '') + tg.rev_full_lr.toFixed(1) + '%' : '—'}</td></tr>
             <tr><td>EBITDA</td><td class="r gold">${fmtMoneyShort(latestEbitda)}</td><td>${sparkSvg(ebi8)}</td><td class="r dim">${tg.ebitda_full_lr != null ? (tg.ebitda_full_lr >= 0 ? '+' : '') + tg.ebitda_full_lr.toFixed(1) + '%' : '—'}</td></tr>
             <tr><td>Free Cash Flow</td><td class="r gold">${fmtMoneyShort(latestFcf)}</td><td>${sparkSvg(fcf8)}</td><td class="r dim">${tg.fcf_full_lr != null ? (tg.fcf_full_lr >= 0 ? '+' : '') + tg.fcf_full_lr.toFixed(1) + '%' : '—'}</td></tr>
+            <tr><td>Diluted EPS</td><td class="r gold">${latestEps != null ? '$' + latestEps.toFixed(2) : '—'}${epsTtm != null ? ' <span class="dim" style="font-size:9px">TTM $' + epsTtm.toFixed(2) + '</span>' : ''}</td><td>${sparkSvg(eps8)}</td><td class="r dim">${tg.eps_full_lr != null ? (tg.eps_full_lr >= 0 ? '+' : '') + tg.eps_full_lr.toFixed(1) + '%' : '—'}</td></tr>
             <tr><td>Total Debt</td><td class="r gold">${fmtMoneyShort(latestDebt)}</td><td>${sparkSvg(debt8)}</td><td class="r dim"></td></tr>
             <tr><td>EBITDA margin</td><td class="r gold">${latestEm != null ? (latestEm*100).toFixed(1) + '%' : '—'}</td><td>${sparkSvg(em8)}</td><td class="r dim"></td></tr>
             <tr><td>FCF margin</td><td class="r gold">${latestFm != null ? (latestFm*100).toFixed(1) + '%' : '—'}</td><td>${sparkSvg(fm8)}</td><td class="r dim"></td></tr>
@@ -1093,6 +1153,7 @@
     // Drivers
     const driverRows = (rub.drivers || []).map(d => `<li>${d}</li>`).join('');
     return `
+      <div class="rep-print-hint">⚠ When saving as PDF: enable "Background graphics" in the print dialog (Chrome: More settings → Background graphics) to preserve the RCG navy/gold theme.</div>
       <div class="rep-header">
         <div class="left">
           <h1>Investment Analysis Report</h1>
@@ -1132,7 +1193,46 @@
           </table>
         </div>
       </div>
-      ${assumptionsCard ? `<div class="rep-grid-2">${assumptionsCard}<div class="rep-card"><h3>Risk Flags / Gates Fired</h3><ul class="rep-bullets">${riskItems}</ul></div></div>` :
+      ${(() => {
+      // ── Catalysts & Coverage card — news headlines + analyst price target ──
+      const hl = cat.headlines || [];
+      const newsItems = hl.length
+        ? hl.map(h => `<li><span class="dim" style="font-size:9px">[${h.source || '?'}]</span> ${h.title}</li>`).join('')
+        : `<li class="dim">No headlines in last 24h${cat.news_count_24h === 0 ? '' : ' (or news data not yet captured)'}</li>`;
+      const polCls = (cat.news_polarity == null) ? 'dim' : (cat.news_polarity > 0.1 ? 'green' : (cat.news_polarity < -0.1 ? 'red' : 'dim'));
+      const polStr = cat.news_polarity == null ? '—' : (cat.news_polarity >= 0 ? '+' : '') + cat.news_polarity.toFixed(2);
+      const aT  = cat.analyst_target;
+      const aN  = cat.analyst_count;
+      const aB  = cat.analyst_buy ?? 0;
+      const aH  = cat.analyst_hold ?? 0;
+      const aS  = cat.analyst_sell ?? 0;
+      const aTotal = aB + aH + aS;
+      const ourPT = pt;
+      const divPct = (aT && ourPT) ? ((ourPT - aT) / aT) * 100 : null;
+      const divCls = divPct == null ? 'dim' : (Math.abs(divPct) > 25 ? 'red' : (Math.abs(divPct) > 10 ? 'gold' : 'green'));
+      const analystBlock = (aT != null && aT > 0)
+        ? `<table>
+             <tr><td>Analyst PT (consensus)</td><td class="r gold">${fmtPtCell(aT)}</td></tr>
+             <tr><td>RCG PT vs analyst</td><td class="r ${divCls}">${divPct == null ? '—' : (divPct >= 0 ? '+' : '') + divPct.toFixed(1) + '%'}</td></tr>
+             <tr><td>Coverage</td><td class="r dim">${aN || 0} analysts ${aTotal > 0 ? `· B${aB} H${aH} S${aS}` : ''}</td></tr>
+             ${cat.analyst_divergence_flag ? '<tr><td colspan="2" class="red" style="font-size:9px">⚠ Divergence flag: RCG engine disagrees materially with consensus</td></tr>' : ''}
+           </table>`
+        : `<div class="nodata">No analyst coverage in current screener data.</div>`;
+      const newsHeader = (cat.news_count_24h != null && cat.news_count_24h > 0)
+        ? `<span style="font-size:9px;color:var(--rcg-text-dim)">${cat.news_count_24h} articles/24h · polarity <span class="${polCls}">${polStr}</span></span>`
+        : '';
+      return `<div class="rep-grid-2">
+        <div class="rep-card">
+          <h3>Latest Headlines ${newsHeader}</h3>
+          <ul class="rep-bullets">${newsItems}</ul>
+        </div>
+        <div class="rep-card">
+          <h3>Analyst Coverage</h3>
+          ${analystBlock}
+        </div>
+      </div>`;
+    })()}
+    ${assumptionsCard ? `<div class="rep-grid-2">${assumptionsCard}<div class="rep-card"><h3>Risk Flags / Gates Fired</h3><ul class="rep-bullets">${riskItems}</ul></div></div>` :
         `<div class="rep-card"><h3>Risk Flags / Gates Fired</h3><ul class="rep-bullets">${riskItems}</ul></div>`}
       <div class="rep-footer">
         ${pp.n_quarters || '?'} quarters of Sharadar SF1 (MRQ, restated) &nbsp;·&nbsp;

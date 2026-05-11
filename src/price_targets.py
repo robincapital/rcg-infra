@@ -614,9 +614,18 @@ def compute_target_price(
         slope, intercept, r2 = _theil_sen(fcf_clean)
         proj = [slope * (len(fcf_clean) + i) + intercept for i in range(1, PROJECTION_QUARTERS + 1)]
         fwd  = sum(proj)
-        # FCF growth override
+        # FCF growth override:
+        #   1. Explicit user FCF growth → use it
+        #   2. User set rev growth but NOT FCF → assume FCF scales with revenue
+        #      (matches typical analyst modeling: hold FCF margin flat → FCF
+        #      growth = revenue growth). Without this, the FCF Yield model is
+        #      "anchored" to trailing data and dampens the blended PT response
+        #      to user-set revenue assumptions, which feels broken.
+        #   3. Neither set → engine default (Theil-Sen on trailing FCF).
         if ov_fcf is not None and fcf_clean[-1] > 0:
             fwd = _apply_growth_override(fwd, fcf_clean[-1], ov_fcf)
+        elif ov_rev is not None and fcf_clean[-1] > 0:
+            fwd = _apply_growth_override(fwd, fcf_clean[-1], ov_rev)
         cv   = float(np.std(fcf_clean) / np.mean(np.abs(fcf_clean))) \
                 if np.mean(np.abs(fcf_clean)) > 0 else 1.0
         if fwd > 0:

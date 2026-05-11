@@ -508,7 +508,7 @@ def narrate_rubric(ticker: str, rubric: dict, pt_payload: dict) -> Optional[str]
 
 def _build_trailing_series_view(f: dict) -> dict:
     """
-    Extract the trailing 8 quarters of revenue / EBITDA / FCF / debt for
+    Extract the trailing 8 quarters of revenue / EBITDA / FCF / debt / EPS for
     display in the report, plus derived per-quarter margins so the reader
     can see the quality trajectory directly.
     """
@@ -522,6 +522,7 @@ def _build_trailing_series_view(f: dict) -> dict:
     ebi = tail(f.get("ebitda_series") or [])
     fcf = tail(f.get("fcf_series") or [])
     dbt = tail(f.get("debt_series") or [])
+    eps_q = tail(f.get("eps_series") or [])
 
     # Per-quarter margins (where defined)
     ebitda_margin = []
@@ -539,19 +540,88 @@ def _build_trailing_series_view(f: dict) -> dict:
     ebitda_margin = list(reversed(ebitda_margin))
     fcf_margin    = list(reversed(fcf_margin))
 
+    # EPS TTM (sum of last 4q) — comparable to typical P/E quote
+    eps_ttm = sum(eps_q[-4:]) if len(eps_q) >= 4 else (sum(eps_q) if eps_q else None)
+
     return {
         "revenue_8q":  rev,
         "ebitda_8q":   ebi,
         "fcf_8q":      fcf,
         "debt_8q":     dbt,
+        "eps_8q":      eps_q,
+        "eps_ttm":     round(eps_ttm, 2) if eps_ttm is not None else None,
         "ebitda_margin_8q": ebitda_margin,
         "fcf_margin_8q":    fcf_margin,
         "trend_growth": {
             "rev_full_lr":    round((_lr_annualized_growth(f.get("revenue_series") or []) or 0) * 100, 2),
             "ebitda_full_lr": round((_lr_annualized_growth(f.get("ebitda_series") or []) or 0) * 100, 2),
             "fcf_full_lr":    round((_lr_annualized_growth(f.get("fcf_series") or []) or 0) * 100, 2),
+            "eps_full_lr":    round((_lr_annualized_growth(f.get("eps_series") or []) or 0) * 100, 2),
         },
     }
+
+
+def _ticker_news_and_analysts(ticker: str) -> dict:
+    """
+    Pull recent news headlines from finnhub_signals.json + analyst price-target
+    data from the screener_universe.csv. Both files refresh on the daily
+    Finnhub + screener crons, so this is current within ~24h.
+    """
+    import csv
+    out = {
+        "news_count_24h":   None,
+        "news_polarity":    None,
+        "headlines":        [],
+        "analyst_count":    None,
+        "analyst_target":   None,
+        "analyst_high":     None,
+        "analyst_low":      None,
+        "analyst_buy":      None,
+        "analyst_hold":     None,
+        "analyst_sell":     None,
+        "analyst_divergence_flag": None,
+    }
+    # News from finnhub_signals.json
+    try:
+        d = json.loads(Path("/home/nixos/Prod/V1/src/finnhub_signals.json").read_text())
+        rec = (d.get("tickers") or {}).get(ticker.upper(), {})
+        n = rec.get("news") or {}
+        out["news_count_24h"] = n.get("count_24h")
+        out["news_polarity"]  = n.get("polarity")
+        # Take last 4 headlines for the report's news card
+        hl = n.get("headlines") or []
+        out["headlines"] = [
+            {
+                "title": (h.get("h") or "")[:140],
+                "source": h.get("src") or "",
+                "ts":    h.get("ts"),
+            } for h in hl[:4] if isinstance(h, dict)
+        ]
+    except Exception as e:
+        out["news_error"] = str(e)[:120]
+    # Analyst data from screener_universe.csv
+    try:
+        with open("/home/nixos/Prod/V1/outputs/screener_universe.csv") as fh:
+            for row in csv.DictReader(fh):
+                if (row.get("ticker") or "").upper() == ticker.upper():
+                    def _f(k):
+                        v = row.get(k)
+                        if v in (None, "", "None"): return None
+                        try: return float(v)
+                        except ValueError: return None
+                    def _i(k):
+                        v = _f(k); return int(v) if v is not None else None
+                    out["analyst_count"]  = _i("analyst_count")
+                    out["analyst_target"] = _f("analyst_target_mean") or _f("target_price")
+                    out["analyst_buy"]    = _i("analyst_buy")
+                    out["analyst_hold"]   = _i("analyst_hold")
+                    out["analyst_sell"]   = _i("analyst_sell")
+                    fl = row.get("analyst_divergence_flag")
+                    out["analyst_divergence_flag"] = (fl == "True" or fl == "1") if fl else None
+                    break
+    except Exception as e:
+        out["analyst_error"] = str(e)[:120]
+    return out
 
 
 def _sector_comparison(sector: Optional[str], pt_block: dict, f: dict) -> dict:
@@ -622,6 +692,7 @@ def build_report(ticker: str) -> dict:
     sector = (pt_block.get("breakdown") or {}).get("sector")
     trailing = _build_trailing_series_view(f)
     sector_comp = _sector_comparison(sector, pt_block, f)
+    catalysts = _ticker_news_and_analysts(ticker)
 
     rubric = compute_valuation_rubric(pt_payload)
 
@@ -657,6 +728,7 @@ def build_report(ticker: str) -> dict:
         "summary_src":    llm_used,         # 'live' | 'cache' | 'none'
         "trailing":       trailing,         # 8q series + derived margins
         "sector_comp":    sector_comp,      # effective vs anchor multiples
+        "catalysts":      catalysts,        # news headlines + analyst targets
         "company_info":   {
             "marketcap":   f.get("marketcap"),
             "cash_on_hand": f.get("cash_on_hand"),

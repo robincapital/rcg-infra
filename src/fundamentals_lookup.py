@@ -81,6 +81,13 @@ def fetch_fundamentals(ticker: str) -> Optional[dict]:
     else:
         fcf = []
 
+    # EPS (diluted preferred — accounts for convertibles + dilutive instruments)
+    eps = []
+    if "epsdil" in tk.columns:
+        eps = _clean_floats(tk["epsdil"].to_list())
+    elif "eps" in tk.columns:
+        eps = _clean_floats(tk["eps"].to_list())
+
     cash_on_hand = 0.0
     for col in ("cashnequsd", "cashneq", "cash"):
         if col in tk.columns:
@@ -112,6 +119,7 @@ def fetch_fundamentals(ticker: str) -> Optional[dict]:
         "revenue_series":  revenue,
         "fcf_series":      fcf,
         "debt_series":     debt,
+        "eps_series":      eps,
         "marketcap":       marketcap,
         "cash_on_hand":    cash_on_hand,
         "sector":          sector,
