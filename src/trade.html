@@ -127,6 +127,93 @@
   .detail-models th, .detail-models td { font-size: 11px; padding: 4px 8px; white-space: nowrap; border-bottom-color: rgba(255,255,255,0.05); cursor: default; }
   .detail-models th { background: transparent; cursor: default; position: static; }
   .detail-models th:hover { color: var(--dim); }
+  /* ─── Per-ticker Assumptions panel ─── */
+  .assumptions-panel { margin-top: 0.5rem; padding: 0.6rem 0.7rem; background: var(--panel2);
+                       border: 1px solid var(--border); border-left: 3px solid var(--orange); border-radius: 4px;
+                       font-size: 11px; }
+  .assumptions-panel h4 { margin: 0 0 0.3rem 0; font-size: 10px; color: var(--orange);
+                          text-transform: uppercase; letter-spacing: 0.5px; display: flex;
+                          align-items: center; justify-content: space-between; gap: 0.5rem; }
+  .assumptions-panel .meta { color: var(--dim); font-size: 10px; font-weight: normal; }
+  .assumptions-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0.6rem;
+                      padding: 0.3rem 0; }
+  .assumption-card { background: var(--panel); padding: 0.5rem 0.6rem; border-radius: 4px; border: 1px solid var(--border); }
+  .assumption-card .row { display: flex; justify-content: space-between; align-items: baseline; }
+  .assumption-card .lbl { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .assumption-card .val { font-family: monospace; font-size: 13px; color: var(--gold); }
+  .assumption-card .val.user-set { color: var(--orange); font-weight: bold; }
+  .assumption-card input[type="range"] { width: 100%; margin: 4px 0 2px; accent-color: var(--orange);
+                                          background: transparent; }
+  .assumption-card .baseline { color: var(--dim); font-size: 9px; font-family: monospace; cursor: pointer; }
+  .assumption-card .baseline:hover { color: var(--gold); }
+  .assumption-pt-summary { margin-top: 0.4rem; padding: 0.5rem; background: var(--panel);
+                           border-radius: 3px; display: flex; gap: 1rem; align-items: center;
+                           font-family: monospace; font-size: 12px; flex-wrap: wrap; }
+  .assumption-pt-summary .arrow { color: var(--dim); }
+  .assumption-pt-summary .pt-engine { color: var(--dim); }
+  .assumption-pt-summary .pt-user { color: var(--orange); font-weight: bold; }
+  .assumption-pt-summary .delta { padding: 1px 6px; border-radius: 3px; font-size: 11px; }
+  .assumption-pt-summary .delta.up { color: var(--green); background: rgba(0, 200, 100, 0.1); }
+  .assumption-pt-summary .delta.down { color: var(--red); background: rgba(220, 60, 60, 0.1); }
+  .assumption-actions { display: flex; gap: 0.4rem; margin-top: 0.4rem; }
+  .assumption-actions button { background: var(--panel); color: var(--dim); border: 1px solid var(--border);
+                                padding: 4px 10px; font-size: 11px; border-radius: 3px; cursor: pointer; font-family: inherit; }
+  .assumption-actions button:hover { color: var(--text); border-color: var(--gold); }
+  .assumption-actions button.primary { background: var(--orange); color: #0d0d0d; border-color: var(--orange); font-weight: bold; }
+  .assumption-actions button.primary:hover { background: var(--gold); border-color: var(--gold); }
+  .assumption-actions button:disabled { opacity: 0.5; cursor: wait; }
+  /* Indicator dot on the PT cell of the Top 40 table when overrides exist */
+  .assumption-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--orange);
+                    margin-right: 4px; vertical-align: middle; cursor: help; }
+  .assumption-dot.stale { background: transparent; border: 1px solid var(--orange); }
+  td.pt-user-overridden { color: var(--orange); }
+  /* ─── PDF report button + report-view panel ─── */
+  .pdf-btn { background: transparent; color: var(--dim); border: 1px solid var(--border);
+             padding: 1px 5px; border-radius: 3px; font-size: 11px; cursor: pointer;
+             font-family: inherit; line-height: 1; }
+  .pdf-btn:hover { color: var(--gold); border-color: var(--gold); }
+  .pdf-btn:disabled { opacity: 0.5; cursor: wait; }
+  #report-view { display: none; }
+  #report-view.show { display: block; position: fixed; inset: 0; background: #fff; color: #111;
+                      overflow: auto; z-index: 9999; padding: 1.5rem 2rem; font-family: Georgia, "Times New Roman", serif; }
+  .rep-header { display: flex; justify-content: space-between; align-items: baseline;
+                border-bottom: 2px solid #333; padding-bottom: 0.5rem; margin-bottom: 0.8rem; }
+  .rep-header h1 { margin: 0; font-size: 22px; color: #111; }
+  .rep-header .brand { font-size: 11px; color: #666; letter-spacing: 0.5px; text-transform: uppercase; }
+  .rep-rating { display: flex; align-items: center; gap: 1.2rem; padding: 0.6rem 0.9rem;
+                border: 2px solid #333; border-radius: 6px; margin-bottom: 0.7rem; }
+  .rep-rating .label { font-size: 22px; font-weight: bold; letter-spacing: 1px; padding: 4px 14px;
+                       border-radius: 4px; }
+  .rep-rating .label.buy   { background: #1a7f1a; color: #fff; }
+  .rep-rating .label.hold  { background: #f4c542; color: #111; }
+  .rep-rating .label.sell  { background: #b03030; color: #fff; }
+  .rep-rating .targets { font-family: monospace; font-size: 13px; }
+  .rep-rating .targets b { font-size: 16px; }
+  .rep-rating .conf { color: #666; font-size: 11px; margin-left: auto; }
+  .rep-summary { background: #f5f5f0; border-left: 3px solid #666; padding: 0.5rem 0.7rem;
+                 font-size: 13px; font-style: italic; margin-bottom: 0.7rem; }
+  .rep-section { margin-bottom: 0.6rem; }
+  .rep-section h3 { margin: 0 0 0.2rem 0; font-size: 11px; color: #555; text-transform: uppercase;
+                    letter-spacing: 0.6px; border-bottom: 1px solid #ccc; padding-bottom: 2px; }
+  .rep-section table { width: 100%; border-collapse: collapse; font-size: 11px; font-family: monospace; }
+  .rep-section th { text-align: left; padding: 3px 6px; background: #f0f0e8; color: #333; }
+  .rep-section td { padding: 3px 6px; border-bottom: 1px solid #eee; }
+  .rep-section td.r { text-align: right; }
+  .rep-bullets { font-size: 12px; padding-left: 1.2rem; margin: 0.2rem 0; }
+  .rep-bullets li { margin: 2px 0; }
+  .rep-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
+  .rep-footer { margin-top: 1rem; padding-top: 0.4rem; border-top: 1px solid #ccc;
+                font-size: 9px; color: #888; text-align: center; }
+  .rep-close { position: fixed; top: 10px; right: 14px; background: #b03030; color: #fff;
+               border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer;
+               font-family: inherit; font-size: 12px; }
+  @media print {
+    body > *:not(#report-view) { display: none !important; }
+    #report-view { display: block !important; position: static !important; padding: 0 !important; }
+    .rep-close { display: none !important; }
+    .rep-header { border-bottom-width: 1px; }
+    @page { margin: 0.5in; size: letter; }
+  }
   .gate-tag { display: inline-block; background: var(--panel); border: 1px solid var(--border); color: var(--dim);
               padding: 1px 6px; border-radius: 3px; margin: 1px 2px; font-size: 10px; font-family: monospace; }
   .gate-tag.cap { color: var(--orange); border-color: var(--orange); }
@@ -503,9 +590,10 @@
             <th data-col="recScore"  data-type="num">Rec</th>
             <th data-col="insScore"  data-type="num">Ins</th>
             <th data-col="actionRank"   data-type="num">Action</th>
+            <th data-col="report" data-type="str" title="Generate 1-page valuation report (Save as PDF from the print dialog)">PDF</th>
           </tr>
         </thead>
-        <tbody><tr><td colspan="17" class="loading empty">loading…</td></tr></tbody>
+        <tbody><tr><td colspan="18" class="loading empty">loading…</td></tr></tbody>
       </table>
     </div>
     <div class="meta" id="top-meta">—</div>
@@ -604,6 +692,344 @@
          + `title="${on ? 'Unpin · stops force-tracking this ticker' : 'Pin · keep tracking even if it drops out of the screener'}">`
          + `${on ? '★' : '☆'}</span>`;
   }
+
+  // ─── Per-ticker growth assumptions ───
+  // Map: ticker → { updated_at, n_overrides, ageDays }
+  // Powers the orange-dot indicator on the PT cell of the Top 40 table.
+  // The full assumption record (baseline + overrides + recomputed PT) is
+  // fetched lazily when the user expands a ticker's detail row.
+  const ASSUMPTIONS_BASE = 'http://rcg-nixos:8085/assumptions';
+  let assumptionsMap = new Map();
+  async function loadAssumptions() {
+    try {
+      const r = await fetch(ASSUMPTIONS_BASE);
+      const d = await r.json();
+      const m = new Map();
+      const summary = d.assumptions || {};
+      const now = Date.now();
+      for (const [t, rec] of Object.entries(summary)) {
+        const ageDays = rec.updated_at ? Math.floor((now - new Date(rec.updated_at).getTime()) / 86400000) : 0;
+        m.set(t, { updated_at: rec.updated_at, n_overrides: rec.n_overrides, ageDays });
+      }
+      assumptionsMap = m;
+    } catch (e) { console.warn('[assumptions] load failed:', e); }
+  }
+  function assumptionDot(ticker) {
+    const rec = assumptionsMap.get(ticker);
+    if (!rec) return '';
+    const stale = rec.ageDays >= 30;
+    const title = `User assumptions stored · ${rec.n_overrides} override${rec.n_overrides === 1 ? '' : 's'}`
+                + ` · set ${rec.updated_at?.slice(0,10) || '?'}`
+                + (stale ? ` · ${rec.ageDays}d old (stale)` : ` · ${rec.ageDays}d old`);
+    return `<span class="assumption-dot ${stale ? 'stale' : ''}" title="${title}"></span>`;
+  }
+  // 4 inputs with sane slider ranges. Order = display order.
+  const ASSUMPTION_INPUTS = [
+    { key: 'rev_growth_ann_pct',    label: 'Revenue growth',    unit: '%/yr', min: -20, max: 60,  step: 0.5 },
+    { key: 'ebitda_margin_now_pct', label: 'EBITDA margin',      unit: '%',    min: -10, max: 60,  step: 0.5 },
+    { key: 'fcf_growth_ann_pct',    label: 'FCF growth',         unit: '%/yr', min: -30, max: 80,  step: 0.5 },
+    { key: 'debt_paydown_ann_pct',  label: 'Net-debt paydown',   unit: '%/yr', min:   0, max: 100, step: 1   },
+  ];
+  function renderAssumptionsPanelInto(el, ticker, data) {
+    if (!data || data.error) {
+      el.innerHTML = `<div class="empty" style="padding:0.5rem;color:var(--red)">Assumptions unavailable: ${data?.error || 'no data'}</div>`;
+      return;
+    }
+    const base = data.baseline || {};
+    const ov   = data.overrides || {};
+    const cards = ASSUMPTION_INPUTS.map(inp => {
+      const b = base[inp.key];
+      const v = (ov[inp.key] != null) ? ov[inp.key] : (b != null ? b : 0);
+      const isUserSet = ov[inp.key] != null;
+      const baseStr = (b == null) ? 'n/a' : `${b.toFixed(1)}${inp.unit}`;
+      return `<div class="assumption-card" data-key="${inp.key}">
+        <div class="row">
+          <span class="lbl">${inp.label}</span>
+          <span class="val ${isUserSet ? 'user-set' : ''}" data-display="${inp.key}">${(+v).toFixed(1)}${inp.unit}</span>
+        </div>
+        <input type="range" min="${inp.min}" max="${inp.max}" step="${inp.step}" value="${v}"
+               data-input="${inp.key}" />
+        <div class="baseline" data-reset="${inp.key}" title="Click to reset this slider to the trailing 6q baseline">
+          baseline 6q · ${baseStr} ↺
+        </div>
+      </div>`;
+    }).join('');
+
+    const dPT = data.pt_engine_default?.target_price;
+    const uPT = data.pt_with_overrides?.target_price;
+    let summary = '';
+    if (dPT != null) {
+      if (uPT != null) {
+        const delta = ((uPT - dPT) / dPT) * 100;
+        const cls = delta >= 0 ? 'up' : 'down';
+        summary = `<span class="pt-engine">Engine PT $${dPT.toFixed(2)}</span>`
+                + `<span class="arrow">→</span>`
+                + `<span class="pt-user">User PT $${uPT.toFixed(2)}</span>`
+                + `<span class="delta ${cls}">${delta >= 0 ? '+' : ''}${delta.toFixed(1)}%</span>`;
+      } else {
+        summary = `<span class="pt-engine">Engine PT $${dPT.toFixed(2)}</span>`
+                + `<span class="meta" style="color:var(--dim);font-size:10px">— move any slider to override</span>`;
+      }
+    }
+    const updated = data.updated_at
+      ? `set ${data.updated_at.slice(0,10)}` : 'no overrides saved';
+    const liveOK = data.live_price != null && data.live_price !== 100.0;
+    const liveNote = liveOK
+      ? `live $${(+data.live_price).toFixed(2)}`
+      : `<span style="color:var(--dim)">no live price — PT uses $100 placeholder</span>`;
+
+    el.innerHTML = `
+      <h4>
+        <span>Assumptions · ${ticker}</span>
+        <span class="meta">${data.n_quarters}q history · latest ${data.latest_datekey || '?'} · ${liveNote} · ${updated}</span>
+      </h4>
+      <div class="assumptions-grid">${cards}</div>
+      <div class="assumption-pt-summary">${summary}</div>
+      <div class="assumption-actions">
+        <button class="primary" data-action="save">Save & Recompute</button>
+        <button data-action="reset-all">Reset all to baseline</button>
+        <button data-action="clear">Clear all overrides</button>
+      </div>`;
+
+    // Wire slider input → live value display
+    el.querySelectorAll('input[type="range"]').forEach(inp => {
+      const key = inp.dataset.input;
+      const disp = el.querySelector(`[data-display="${key}"]`);
+      inp.addEventListener('input', () => {
+        const u = ASSUMPTION_INPUTS.find(i => i.key === key).unit;
+        disp.textContent = (+inp.value).toFixed(1) + u;
+        disp.classList.add('user-set');
+      });
+    });
+    // Per-slider baseline reset
+    el.querySelectorAll('[data-reset]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const key = btn.dataset.reset;
+        const b = base[key];
+        if (b == null) return;
+        const inp = el.querySelector(`[data-input="${key}"]`);
+        const disp = el.querySelector(`[data-display="${key}"]`);
+        inp.value = b;
+        const u = ASSUMPTION_INPUTS.find(i => i.key === key).unit;
+        disp.textContent = b.toFixed(1) + u;
+        disp.classList.remove('user-set');
+      });
+    });
+    // Save button → POST overrides for any slider whose value differs from baseline
+    el.querySelector('[data-action="save"]').addEventListener('click', async () => {
+      const btn = el.querySelector('[data-action="save"]');
+      btn.disabled = true; btn.textContent = 'saving…';
+      const body = {};
+      ASSUMPTION_INPUTS.forEach(inp => {
+        const v = +el.querySelector(`[data-input="${inp.key}"]`).value;
+        const b = base[inp.key];
+        // Only persist as override if user moved it meaningfully off baseline
+        if (b == null || Math.abs(v - b) >= inp.step) body[inp.key] = v;
+        else body[inp.key] = null;
+      });
+      if (!Object.values(body).some(v => v != null)) {
+        // Nothing to save — treat as clear
+        await clearAssumptions(ticker, el);
+        btn.disabled = false; btn.textContent = 'Save & Recompute';
+        return;
+      }
+      try {
+        const r = await fetch(`${ASSUMPTIONS_BASE}/${ticker}`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(body),
+        });
+        const d = await r.json();
+        await loadAssumptions();
+        renderAssumptionsPanelInto(el, ticker, d);
+        renderTopTable();   // re-render so the PT cell picks up the user PT + orange dot
+      } catch (e) {
+        alert(`Save failed: ${e.message || e}`);
+      }
+      btn.disabled = false; btn.textContent = 'Save & Recompute';
+    });
+    // Reset all sliders to baseline (visual only — does NOT clear stored overrides)
+    el.querySelector('[data-action="reset-all"]').addEventListener('click', () => {
+      ASSUMPTION_INPUTS.forEach(inp => {
+        const b = base[inp.key];
+        if (b == null) return;
+        const i = el.querySelector(`[data-input="${inp.key}"]`);
+        const d = el.querySelector(`[data-display="${inp.key}"]`);
+        i.value = b;
+        d.textContent = b.toFixed(1) + inp.unit;
+        d.classList.remove('user-set');
+      });
+    });
+    // Clear all stored overrides via DELETE
+    el.querySelector('[data-action="clear"]').addEventListener('click', () => clearAssumptions(ticker, el));
+  }
+  async function clearAssumptions(ticker, el) {
+    if (!confirm(`Clear stored assumption overrides for ${ticker}?`)) return;
+    try {
+      const r = await fetch(`${ASSUMPTIONS_BASE}/${ticker}`, { method: 'DELETE' });
+      const d = await r.json();
+      await loadAssumptions();
+      renderAssumptionsPanelInto(el, ticker, d);
+      renderTopTable();
+    } catch (e) { alert(`Clear failed: ${e.message || e}`); }
+  }
+  async function fetchAssumptions(ticker) {
+    try {
+      const r = await fetch(`${ASSUMPTIONS_BASE}/${ticker}`);
+      return await r.json();
+    } catch (e) { return { error: e.message || String(e) }; }
+  }
+
+  // ─── Per-ticker valuation report (📄 button → PDF) ───
+  // Click fetches /report/<T>, populates the hidden #report-view panel, shows
+  // it full-screen, and triggers window.print(). The print stylesheet hides
+  // everything except the report so "Save as PDF" produces a clean 1-pager.
+  // Server-side rubric is deterministic; the 2-sentence summary uses Haiku 4.5
+  // if an Anthropic API key is configured, otherwise shows a placeholder.
+  const REPORT_BASE = 'http://rcg-nixos:8085/report';
+  function ratingClass(rating) {
+    if (!rating) return 'hold';
+    if (/BUY/i.test(rating))  return 'buy';
+    if (/SELL/i.test(rating)) return 'sell';
+    if (/REDUCE/i.test(rating)) return 'sell';
+    return 'hold';
+  }
+  function fmtPtCell(v) { return v == null ? '—' : '$' + (+v).toFixed(2); }
+  function buildReportHtml(rep) {
+    if (rep.error) {
+      return `<div style="padding:1rem;color:#b03030">Report unavailable: ${rep.error}</div>`;
+    }
+    const t       = rep.ticker;
+    const rub     = rep.rubric || {};
+    const pp      = rep.pt_payload || {};
+    const eng     = pp.pt_engine_default || {};
+    const usr     = pp.pt_with_overrides;
+    const pt      = usr?.target_price ?? eng.target_price;
+    const upside  = usr?.upside_pct   ?? eng.upside_pct;
+    const livePx  = pp.live_price;
+    const ov      = pp.overrides || {};
+    const base    = pp.baseline || {};
+    const hasUserPT = !!usr;
+    const summary = rep.summary || (
+      rep.summary_src === 'none'
+        ? `Narrative summary unavailable: no ANTHROPIC_API_KEY configured on the server. `
+        + `The deterministic rating + drivers below are the authoritative content of this report.`
+        : '');
+    // Per-model PT breakdown
+    const models  = (eng.breakdown || {}).models || {};
+    const cw      = (eng.breakdown || {}).conviction_weights || {};
+    const modelRows = Object.entries(models).map(([name, m]) => `
+      <tr>
+        <td>${name}${(eng.breakdown||{}).dominant_model === name ? ' ★' : ''}</td>
+        <td class="r">${fmtPtCell(m.pt)}</td>
+        <td class="r">${m.r2 ?? '—'}</td>
+        <td class="r">${m.conviction ?? '—'}</td>
+        <td class="r">${cw[name] != null ? (+cw[name]).toFixed(3) : '—'}</td>
+        <td>${m.applied_cap || ''}</td>
+      </tr>`).join('');
+    // User assumptions table
+    const KEY_LABEL = {
+      'rev_growth_ann_pct':    'Revenue growth (%/yr)',
+      'fcf_growth_ann_pct':    'FCF growth (%/yr)',
+      'ebitda_margin_now_pct': 'EBITDA margin (%)',
+      'debt_paydown_ann_pct':  'Net-debt paydown (%/yr)',
+    };
+    const overrideRows = Object.entries(KEY_LABEL).map(([k, lbl]) => {
+      const b = base[k]; const u = ov[k];
+      if (u == null) return ''; // only show keys the user overrode
+      return `<tr>
+        <td>${lbl}</td>
+        <td class="r">${b == null ? '—' : (+b).toFixed(1)}</td>
+        <td class="r" style="color:#b46c00;font-weight:bold">${(+u).toFixed(1)}</td>
+        <td class="r" style="color:#b46c00">${b == null ? '' : ((u-b) >= 0 ? '+' : '') + (u-b).toFixed(1)}</td>
+      </tr>`;
+    }).join('');
+    const assumptionsBlock = overrideRows
+      ? `<div class="rep-section"><h3>User assumptions applied (vs trailing 6q baseline)</h3>
+           <table>
+             <thead><tr><th>Input</th><th class="r">Baseline 6q</th><th class="r">User value</th><th class="r">Δ</th></tr></thead>
+             <tbody>${overrideRows}</tbody>
+           </table>
+           <div style="font-size:9px;color:#888;margin-top:3px">Updated ${(pp.updated_at||'').slice(0,10) || '—'}</div>
+         </div>`
+      : `<div class="rep-section"><h3>Assumptions</h3>
+           <div style="font-size:11px;color:#666">Engine defaults — no user overrides applied to this ticker.</div></div>`;
+    // Gates / risk
+    const gates = eng.gates_fired || [];
+    const riskBlock = gates.length
+      ? `<ul class="rep-bullets">${gates.map(g => `<li>${g}</li>`).join('')}</ul>`
+      : `<div style="font-size:11px;color:#666">No model gates fired — all 4 PT models cleared the R² floor.</div>`;
+    // Drivers
+    const driverRows = (rub.drivers || []).map(d => `<li>${d}</li>`).join('');
+    return `
+      <div class="rep-header">
+        <h1>${t} <span style="font-size:12px;color:#666;font-weight:normal">· ${(eng.breakdown||{}).sector || 'Sector n/a'}</span></h1>
+        <div class="brand">RCG Alpha Engine · Valuation Report · ${new Date().toLocaleDateString()}</div>
+      </div>
+      <div class="rep-rating">
+        <span class="label ${ratingClass(rub.rating)}">${rub.rating || 'HOLD'}</span>
+        <div class="targets">
+          <div>Live: ${fmtPtCell(livePx)} → Target: <b>${fmtPtCell(pt)}</b>
+            <span style="color:${(upside||0) >= 0 ? '#1a7f1a' : '#b03030'}">${upside == null ? '' : (upside >= 0 ? '+' : '') + upside.toFixed(1) + '%'}</span>
+          </div>
+          <div style="font-size:11px;color:#666">PT source: ${rub.pt_source || 'N/A'} · Quality ${(rub.quality != null) ? (+rub.quality).toFixed(2) : '—'}${hasUserPT ? ' · USER ASSUMPTIONS APPLIED' : ''}</div>
+        </div>
+        <span class="conf">Conf ${((rub.confidence||0) * 100).toFixed(0)}%</span>
+      </div>
+      <div class="rep-summary">${summary || '<em>(narrative pending)</em>'}</div>
+      <div class="rep-grid">
+        <div>
+          <div class="rep-section"><h3>Rating drivers</h3>
+            <ul class="rep-bullets">${driverRows}</ul>
+          </div>
+          ${assumptionsBlock}
+        </div>
+        <div>
+          <div class="rep-section"><h3>Per-model PT breakdown</h3>
+            <table>
+              <thead><tr><th>Model</th><th class="r">PT</th><th class="r">R²</th><th class="r">Conv</th><th class="r">Weight</th><th>Cap</th></tr></thead>
+              <tbody>${modelRows || '<tr><td colspan="6" style="color:#888">No models qualified</td></tr>'}</tbody>
+            </table>
+          </div>
+          <div class="rep-section"><h3>Risk flags / gates fired</h3>${riskBlock}</div>
+        </div>
+      </div>
+      <div class="rep-footer">
+        ${pp.n_quarters || '?'} quarters of SF1 data · latest report period ${pp.latest_datekey || '?'} ·
+        narrative source: ${rep.summary_src || 'none'} ·
+        generated ${rep.generated_at ? rep.generated_at.slice(0,19).replace('T',' ') + ' UTC' : ''}
+        <br>RCG Alpha Engine — for research use only. Not investment advice.
+      </div>
+    `;
+  }
+  async function openReport(ticker, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = '…'; }
+    try {
+      const r = await fetch(`${REPORT_BASE}/${encodeURIComponent(ticker)}`);
+      const rep = await r.json();
+      const view = document.getElementById('report-view');
+      const body = document.getElementById('rep-body');
+      body.innerHTML = buildReportHtml(rep);
+      view.classList.add('show');
+      // Brief delay so layout settles before browser print dialog
+      setTimeout(() => window.print(), 200);
+    } catch (e) {
+      alert(`Report failed: ${e.message || e}`);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '📄'; }
+    }
+  }
+  function closeReport() {
+    document.getElementById('report-view').classList.remove('show');
+  }
+  document.getElementById('rep-close').addEventListener('click', closeReport);
+  // Esc also closes
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && document.getElementById('report-view').classList.contains('show')) {
+      closeReport();
+    }
+  });
+  // After print dialog dismisses, keep the panel up so the user can read/re-print;
+  // closing is explicit via Esc or the close button.
   const BIAS_OFFSET_MAGNITUDE = 25;  // points added/subtracted from signedScore display
 
   function biasOffset() {
@@ -1687,13 +2113,18 @@
     const historyPlaceholder =
       `<div id="${historyId}"><div class="empty" style="padding:0.5rem;font-size:11px">` +
       `loading prediction history…</div></div>`;
-    return `<tr class="detail-row"><td colspan="17">
+    const assumptionsId = `assumptions-${row.ticker}`;
+    const assumptionsPlaceholder =
+      `<div id="${assumptionsId}" class="assumptions-panel">` +
+      `<div class="empty" style="padding:0.5rem;font-size:11px">loading assumptions…</div></div>`;
+    return `<tr class="detail-row"><td colspan="18">
       <div class="detail-top">
         <div>${chart}</div>
         <div>${stats}</div>
       </div>
       ${levels}
       ${catalysts}
+      ${assumptionsPlaceholder}
       <div style="margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid var(--border);">
         <h4 style="margin:0 0 0.3rem 0;font-size:10px;color:var(--gold);text-transform:uppercase;letter-spacing:0.5px;">
           Prediction History (last ${PREDICTION_HISTORY_HOURS}h, captured every 30 min)</h4>
@@ -1810,7 +2241,7 @@
       const empty = filters.starredOnly
         ? 'no starred tickers yet — click ☆ on any row, or type a ticker in the toolbar and press + Pin'
         : 'no fundamental + BBG overlap yet';
-      tbody.innerHTML = `<tr><td colspan="17" class="empty">${empty}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="18" class="empty">${empty}</td></tr>`;
       document.getElementById('top-meta').textContent = '—';
       return;
     }
@@ -1840,7 +2271,7 @@
           <td class="neutral">${fmtPx(m.eod)}</td>
           <td>${fmtPx(m.livePx)}</td>
           <td class="${moveClass(m.move)}">${fmtPct(m.move)}</td>
-          <td class="neutral">${fmtPx(m.targetPx)}</td>
+          <td class="neutral ${assumptionsMap.has(m.ticker) ? 'pt-user-overridden' : ''}">${assumptionDot(m.ticker)}${fmtPx(m.targetPx)}</td>
           <td class="${upsideCls}">${fmtPct(m.upsidePct)}</td>
           <td>${m.rsi == null ? '—' : m.rsi.toFixed(0)}</td>
           <td>${m.volRatio == null ? '—' : m.volRatio.toFixed(2)+'x'}</td>
@@ -1887,6 +2318,7 @@ Signal: ${m.insSignal ?? 'neutral'}`;
             })()}
           </td>
           <td>${m.action ? '<span class="badge '+m.action.cls+'">'+m.action.l+'</span>' : '—'}</td>
+          <td><button class="pdf-btn" data-report="${m.ticker}" title="Generate 1-page valuation report (rubric + LLM summary, Save as PDF)">📄</button></td>
         </tr>
       `);
       if (expanded.has(m.ticker)) html.push(renderDetail(m));
@@ -1907,6 +2339,13 @@ Signal: ${m.insSignal ?? 'neutral'}`;
         togglePin(s.dataset.pin, s);
       });
     });
+    // PDF button: open per-ticker valuation report (deterministic rubric + LLM summary → print)
+    tbody.querySelectorAll('.pdf-btn[data-report]').forEach(b => {
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openReport(b.dataset.report, b);
+      });
+    });
     // Lazy-load prediction history charts for any expanded tickers
     expanded.forEach(ticker => {
       const placeholder = document.getElementById(`pred-history-${ticker}`);
@@ -1918,6 +2357,13 @@ Signal: ${m.insSignal ?? 'neutral'}`;
           ? buildPredictionHistoryChart(data)
           : '<div class="empty" style="padding:0.5rem;font-size:11px;color:var(--red)">history fetch failed — check sentiment_refresh_server is running on port 8085</div>';
       });
+    });
+    // Lazy-load the per-ticker Assumptions panel (sliders + recomputed PT)
+    expanded.forEach(ticker => {
+      const el = document.getElementById(`assumptions-${ticker}`);
+      if (!el || el.dataset.loaded === '1') return;
+      el.dataset.loaded = '1';
+      fetchAssumptions(ticker).then(d => renderAssumptionsPanelInto(el, ticker, d));
     });
     const counts = rows.reduce((acc, r) => {
       const k = r.action?.l || 'NOISE';
@@ -2297,16 +2743,27 @@ Signal: ${m.insSignal ?? 'neutral'}`;
   fetchLeaderboard().then(() => renderLeaderboard());
   setInterval(() => fetchLeaderboard().then(() => renderLeaderboard()), 60 * 60 * 1000);
 
-  // Load the user-pinned set first so star icons paint correctly on the very
-  // first render, then kick the periodic refresh.
-  loadPinned().then(() => {
+  // Load the user-pinned set + per-ticker assumptions first so star icons
+  // and orange-dot indicators paint correctly on the very first render.
+  Promise.all([loadPinned(), loadAssumptions()]).then(() => {
     syncToolbarUI();
     refresh();
   });
-  // Re-sync pinned set every 5 min in case another browser tab pinned/unpinned
-  setInterval(() => loadPinned().then(syncToolbarUI), 5 * 60 * 1000);
+  // Re-sync pinned + assumptions every 5 min in case another browser tab edited them
+  setInterval(() => {
+    Promise.all([loadPinned(), loadAssumptions()]).then(syncToolbarUI);
+  }, 5 * 60 * 1000);
   setInterval(refresh, REFRESH_MS);
 })();
 </script>
+
+<!-- Per-ticker valuation report — populated on demand by the 📄 button in
+     each Top 40 row. Hidden by default; on click we fetch /report/<T>,
+     render into here, show full-screen, then trigger window.print(). -->
+<div id="report-view">
+  <button class="rep-close" id="rep-close">Close</button>
+  <div id="rep-body"></div>
+</div>
+
 </body>
 </html>

@@ -322,6 +322,98 @@ def _fundamental_quality_score(ebitda_series: Sequence,
 
 
 # ============================================================
+# PER-TICKER GROWTH OVERRIDES (user_assumptions.json)
+# ============================================================
+# The engine's default projection uses Theil-Sen slope over the FULL trailing
+# series. Per-ticker user overrides live in src/user_assumptions.json and let
+# the user replace specific projection inputs with their own forward view.
+#
+# Slider-midpoint baseline = trailing 6q linear-regression slope, annualized.
+# (Not Theil-Sen — for the UI baseline we want OLS so the user sees a
+# trend-line value that lines up with their mental model of "the last 6q's
+# growth rate." Theil-Sen is the engine's robust default; OLS-6q is the
+# user-facing reference point.)
+
+_BASELINE_QUARTERS = 6
+
+
+def _lr_annualized_growth(series: Sequence) -> Optional[float]:
+    """
+    Annualized growth rate from OLS regression slope on the last
+    _BASELINE_QUARTERS values. Returns None if insufficient or non-positive mean.
+    Output is a fraction (0.10 = +10% annualized).
+    """
+    s = _clean(series)
+    if len(s) < 3:
+        return None
+    window = s[-_BASELINE_QUARTERS:]
+    n = len(window)
+    if n < 3:
+        return None
+    xs = np.arange(n, dtype=float)
+    ys = np.asarray(window, dtype=float)
+    mean_y = float(np.mean(np.abs(ys)))
+    if mean_y <= 0:
+        return None
+    # OLS slope
+    slope = float(np.cov(xs, ys, bias=True)[0, 1] / np.var(xs))
+    # Convert slope (units per quarter) → annualized growth pct using mean
+    return (slope * 4.0) / mean_y
+
+
+def _ebitda_margin_now(ebitda_series: Sequence, revenue_series: Sequence) -> Optional[float]:
+    """Most recent EBITDA / Revenue ratio, as a fraction. None if undefined."""
+    e = _clean(ebitda_series); r = _clean(revenue_series)
+    if not e or not r or r[-1] <= 0:
+        return None
+    return float(e[-1] / r[-1])
+
+
+def compute_growth_baseline(*, ebitda_series, revenue_series, fcf_series, debt_series) -> dict:
+    """
+    Compute trailing-6q implied growth/margin baseline shown as slider centers
+    in the dashboard's per-ticker Assumptions panel. Pure read of the trailing
+    fundamentals — no engine state, safe to call from the server.
+    """
+    return {
+        "rev_growth_ann_pct":      _to_pct(_lr_annualized_growth(revenue_series)),
+        "fcf_growth_ann_pct":      _to_pct(_lr_annualized_growth(fcf_series)),
+        "ebitda_margin_now_pct":   _to_pct(_ebitda_margin_now(ebitda_series, revenue_series)),
+        # debt: paydown rate = -(slope of debt over baseline window) / latest_debt, annualized
+        "debt_paydown_ann_pct":    _to_pct(
+            -_lr_annualized_growth(debt_series) if _lr_annualized_growth(debt_series) is not None else None
+        ),
+        "window_quarters":         _BASELINE_QUARTERS,
+    }
+
+
+def _to_pct(x):
+    """Fraction → percent rounded; None passthrough."""
+    return None if x is None else round(x * 100, 2)
+
+
+def _apply_growth_override(default_fwd_sum: float, latest_quarterly: float,
+                            override_ann_pct: Optional[float]) -> float:
+    """
+    Replace a 4-quarter forward sum projection with one driven by a user-set
+    annualized growth rate compounded off the latest quarterly value.
+
+    growth_ann_pct is in PERCENT (e.g. 12.5 means +12.5%/yr). None → no change.
+    """
+    if override_ann_pct is None or latest_quarterly <= 0:
+        return default_fwd_sum
+    g = override_ann_pct / 100.0
+    # Quarterly growth = (1 + g)^(1/4) - 1
+    q_growth = (1.0 + g) ** 0.25 - 1.0
+    total = 0.0
+    v = latest_quarterly
+    for _ in range(PROJECTION_QUARTERS):
+        v *= (1.0 + q_growth)
+        total += v
+    return total
+
+
+# ============================================================
 # CORE PUBLIC API
 # ============================================================
 def compute_target_price(
@@ -342,6 +434,7 @@ def compute_target_price(
     apply_rate_compression: bool       = True,
     apply_quality_haircut:  bool       = True,
     apply_envelope:         bool       = True,
+    growth_overrides:       Optional[dict] = None,
 ) -> TargetPriceResult:
     """
     Compute multi-model conviction-weighted price target with all RCG guardrails.
@@ -379,6 +472,25 @@ def compute_target_price(
     rev_raw   = _clean(revenue_series)
     median_qoq, ann_growth, is_emerging, growth_mult = _revenue_growth_stats(rev_raw)
     quality   = _fundamental_quality_score(ebitda_series, revenue_series, fcf_series)
+
+    # ─── User growth overrides ────────────────────────────────
+    # When provided via the per-ticker Assumptions panel, these replace the
+    # default Theil-Sen projections inside the individual model blocks.
+    # None entries → that model falls through to engine default unchanged.
+    overrides = growth_overrides or {}
+    ov_rev    = overrides.get("rev_growth_ann_pct")
+    ov_fcf    = overrides.get("fcf_growth_ann_pct")
+    ov_margin = overrides.get("ebitda_margin_now_pct")  # absolute target margin %, not delta
+    ov_paydn  = overrides.get("debt_paydown_ann_pct")
+
+    # Debt override: paydown is applied to latest_debt before EV calc
+    if ov_paydn is not None and latest_debt > 0:
+        # Annual paydown over PROJECTION_QUARTERS/4 years
+        years   = PROJECTION_QUARTERS / 4.0
+        retained = max(0.0, 1.0 - (ov_paydn / 100.0) * years)
+        latest_debt = latest_debt * retained
+        current_ev  = marketcap + latest_debt - cash_on_hand
+
     net_debt  = latest_debt - cash_on_hand
     net_debt_to_rev = (net_debt / (rev_raw[-1] * 4)) if rev_raw and rev_raw[-1] > 0 else 999
     is_clean_balance_sheet = net_debt_to_rev < 0.5
@@ -396,6 +508,19 @@ def compute_target_price(
         slope, intercept, r2 = _theil_sen(ebitda_clean)
         proj = [slope * (len(ebitda_clean) + i) + intercept for i in range(1, PROJECTION_QUARTERS + 1)]
         fwd  = sum(proj)
+        # Override: if user set rev_growth + ebitda_margin, derive projected
+        # EBITDA from projected revenue × target margin instead of Theil-Sen
+        if ov_rev is not None and ov_margin is not None and rev_raw and rev_raw[-1] > 0:
+            target_margin = ov_margin / 100.0
+            rev_fwd_for_ebitda = _apply_growth_override(
+                default_fwd_sum = sum(rev_raw[-PROJECTION_QUARTERS:]) if len(rev_raw) >= PROJECTION_QUARTERS else rev_raw[-1] * PROJECTION_QUARTERS,
+                latest_quarterly = rev_raw[-1],
+                override_ann_pct = ov_rev,
+            )
+            fwd = rev_fwd_for_ebitda * target_margin
+        elif ov_rev is not None and rev_raw and rev_raw[-1] > 0:
+            # Rev override only — scale EBITDA by same growth rate
+            fwd = _apply_growth_override(fwd, ebitda_clean[-1], ov_rev)
         cv   = float(np.std(ebitda_clean) / np.mean(np.abs(ebitda_clean))) \
                 if np.mean(np.abs(ebitda_clean)) > 0 else 1.0
         if fwd > 0:
@@ -438,6 +563,9 @@ def compute_target_price(
         slope, intercept, r2 = _theil_sen(rev_clean)
         proj = [slope * (len(rev_clean) + i) + intercept for i in range(1, PROJECTION_QUARTERS + 1)]
         fwd  = sum(proj)
+        # User override on revenue growth replaces Theil-Sen projection
+        if ov_rev is not None:
+            fwd = _apply_growth_override(fwd, rev_clean[-1], ov_rev)
         cv   = float(np.std(rev_clean) / np.mean(np.abs(rev_clean))) \
                 if np.mean(np.abs(rev_clean)) > 0 else 1.0
         if fwd > 0:
@@ -486,6 +614,9 @@ def compute_target_price(
         slope, intercept, r2 = _theil_sen(fcf_clean)
         proj = [slope * (len(fcf_clean) + i) + intercept for i in range(1, PROJECTION_QUARTERS + 1)]
         fwd  = sum(proj)
+        # FCF growth override
+        if ov_fcf is not None and fcf_clean[-1] > 0:
+            fwd = _apply_growth_override(fwd, fcf_clean[-1], ov_fcf)
         cv   = float(np.std(fcf_clean) / np.mean(np.abs(fcf_clean))) \
                 if np.mean(np.abs(fcf_clean)) > 0 else 1.0
         if fwd > 0:
@@ -516,8 +647,10 @@ def compute_target_price(
             target_mature_ann = 0.05
             rev_proj = current_ann_rev
             projected_revs = []
+            # User can pin the year-1 growth rate; decay still applies for years 2 + 3
+            base_ann = (ov_rev / 100.0) if ov_rev is not None else (median_qoq * 4)
             for d in decay:
-                growth_this_yr = max(target_mature_ann, median_qoq * 4 * d)
+                growth_this_yr = max(target_mature_ann, base_ann * d)
                 rev_proj *= (1 + growth_this_yr)
                 projected_revs.append(rev_proj)
 
