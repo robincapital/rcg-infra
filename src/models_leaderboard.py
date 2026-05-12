@@ -27,6 +27,26 @@ OUTPUT_PATH = Path("/home/nixos/Prod/V1/outputs/leaderboard.json")
 HORIZONS = ["30min", "60min", "4h"]
 
 
+# Fallback family mapping: most signal rows in the DB predate the family
+# tag in runs.config_json. Until those age out (~7 days), we infer family
+# from the model name. New entrants added to models_capture.py also need
+# to be added here OR they'll show as "other".
+def family_from_model(model_name: str) -> str:
+    n = model_name.lower()
+    if n == "bbg_predictive_composite": return "bbg_composite"
+    if n.startswith("momentum_"):       return "momentum"
+    if n.startswith("mean_rev"):        return "mean_reversion"
+    if n.startswith("rsi_extreme"):     return "rsi_extreme"
+    if n.startswith("sma_cross"):       return "sma_cross"
+    if n.startswith("ema_cross"):       return "ema_cross"
+    if n.startswith("bollinger_pos"):   return "bollinger_pos"
+    if n.startswith("donchian_break"):  return "donchian_break"
+    if n.startswith("lr_slope"):        return "lr_slope"
+    if n.startswith("arima"):           return "arima"
+    if n.startswith("combo_"):          return "ensemble"
+    return "other"
+
+
 def _metrics(scores, rets):
     """Compute hit_rate, IC directional, IC Spearman, avg-score-abs, avg-realized
     from parallel arrays of (score, realized_return). Returns dict with the
@@ -119,21 +139,23 @@ def main():
             print("[leaderboard] no model_* signals found yet")
             return
 
-        # ─── Pull all (model_score, realized_return, regime) triples per horizon ───
+        # ─── Pull all (model_score, realized_return, regime, family) triples per horizon ───
         # We aggregate across ALL captured runs in the DB (no time window).
-        # Regime is read from the score-run's config_json (set by models_capture
-        # at fire-time). Runs from before regime tagging was added have NULL
-        # regime and contribute only to the "all" overall bucket.
+        # Family + regime are read from the score-run's config_json (set by
+        # models_capture at fire-time). Runs from before these tags were
+        # added have NULL values and just collapse into "all" / no-family.
         results = []
         for score_name in score_names:
             model_label = score_name.replace("model_", "").replace("_score", "")
+            family_seen = None
             for horizon in HORIZONS:
                 ret_name = f"realized_return_{horizon}_pct"
                 with conn.cursor() as cur:
                     cur.execute(
                         """
                         SELECT score.signal_value, ret.signal_value,
-                               r.config_json -> 'regime' ->> 'regime_label' AS regime_label
+                               r.config_json -> 'regime' ->> 'regime_label' AS regime_label,
+                               r.config_json ->> 'family'                   AS family
                         FROM signals score
                         JOIN signals ret
                           ON score.run_id = ret.run_id AND score.ticker = ret.ticker
@@ -145,12 +167,19 @@ def main():
                         """,
                         (score_name, ret_name),
                     )
-                    triples = [(float(s), float(r), lbl) for s, r, lbl in cur.fetchall()]
+                    rows = cur.fetchall()
+                triples = [(float(s), float(r), lbl) for s, r, lbl, _ in rows]
+                # Last non-null family wins (we just need the label, not stats)
+                for _, _, _, fam in rows:
+                    if fam:
+                        family_seen = fam
+                        break
 
                 by_regime = _stratify_by_regime(triples)
                 overall = by_regime.get("all", _metrics([], []))
                 row = {
                     "model":          model_label,
+                    "family":         family_seen or family_from_model(model_label),
                     "horizon":        horizon,
                     **overall,                   # n, hit_rate, ic_directional, ic_spearman, ...
                     "by_regime":      {k: v for k, v in by_regime.items() if k != "all"},
@@ -183,10 +212,37 @@ def main():
             overall = by_regime.get("all", _metrics([], []))
             results.append({
                 "model":          "bbg_predictive_composite",
+                "family":         "bbg_composite",
                 "horizon":        horizon,
                 **overall,
                 "by_regime":      {k: v for k, v in by_regime.items() if k != "all"},
             })
+
+    # ─── Champion per (family, horizon) ─────────────────────────────────
+    # Highest IC directional wins. Sample-size guard: variants with n < 50
+    # aren't eligible to be champion (they're warming up). The dashboard
+    # surfaces the champion prominently; other variants collapse under it
+    # as challengers that keep running.
+    MIN_N_FOR_CHAMPION = 50
+    champions = {}                 # (family, horizon) → model_name
+    by_fam_hz = {}
+    for r in results:
+        if not r.get("family"): continue
+        key = (r["family"], r["horizon"])
+        by_fam_hz.setdefault(key, []).append(r)
+    for key, rows in by_fam_hz.items():
+        eligible = [r for r in rows if (r.get("n") or 0) >= MIN_N_FOR_CHAMPION
+                                       and r.get("ic_directional") is not None]
+        if eligible:
+            best = max(eligible, key=lambda r: r["ic_directional"])
+            champions[f"{key[0]}|{key[1]}"] = best["model"]
+            best["is_champion"] = True
+        # Mark family + horizon list (so dashboard can rank within a family even
+        # when sorted by some other column)
+        family_rank_by_ic = sorted(rows, key=lambda r: r.get("ic_directional") or -2, reverse=True)
+        for i, rr in enumerate(family_rank_by_ic):
+            rr["family_rank"] = i + 1
+            rr["family_size"] = len(rows)
 
     current_regime = regime_tag.compute_regime()
     payload = {
@@ -194,6 +250,7 @@ def main():
         "horizons":        HORIZONS,
         "current_regime":  current_regime,
         "regime_labels":   regime_tag.ALL_REGIME_LABELS,
+        "champions":       champions,        # "family|horizon" → model_name
         "results":         results,
     }
     OUTPUT_PATH.write_text(json.dumps(payload, default=str, indent=2))

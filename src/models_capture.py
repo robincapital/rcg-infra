@@ -1,38 +1,42 @@
 """
-models_capture.py — run every prediction model in the tournament + capture scores
+models_capture.py — parameterized tournament + per-fire regime tagging
 
-Runs every 30 min during market hours. Each model implements a single
-score(ticker, bars, eod) -> float method that returns a directional score
-(typically -100 to +100, but anything works since we'll rank by IC).
+Runs every 30 min during market hours. Each entrant implements
+score(bars) -> float | None and returns a directional score (typically
+-100 to +100, though magnitude is ranked by IC, not enforced).
 
-The "tournament" is just every model writing to the signals table with
-run_type='model_score' and signal_name=f"model_{model_name}_score". Forward-
-return capture already joins them with realized returns automatically.
-The leaderboard is just a SQL query over (signal_name, realized_return)
-asking "which models had the highest IC over the last N days".
+Roster is organized by FAMILY. Each family has multiple parameter variants.
+All variants keep running indefinitely — even underperformers — because a
+"dead" model usually just means we're in the wrong regime for it. When
+conditions flip, the formerly-dead variant typically revives. The
+leaderboard surfaces the per-family champion (highest IC over the trailing
+window) but no variant is ever silenced.
 
-Roster (10 entrants):
-  momentum_5bar       — 5-bar return %
-  mean_rev_20         — 20-bar z-score, sign-flipped (counter-trend)
-  rsi_extreme_14      — RSI<30 bull, RSI>70 bear (reversion)
-  sma_cross_5_20      — (sma5 − sma20) / sma20 × 100  (trend)
-  ema_cross_12_26     — MACD-style EMA cross  (trend)
-  bollinger_pos_20    — position within ±2σ band, sign-flipped (mean-rev)
-  donchian_break_20   — 20-bar high/low breakout strength (trend)
-  lr_slope_20         — 20-bar linear regression slope, normalized (trend)
-  arima_1             — AR(1) one-step-ahead forecast vs current price
-  combo_trend         — equal-weight blend of trend models (ensemble)
+Every fire writes the current regime to runs.config_json so per-(model,
+horizon, regime) IC can be computed downstream.
 
-To add a new model: write a function that takes (bars) and returns a float;
-add to MODELS list. No other changes needed — forward returns and IC
-computation pick it up automatically.
+Families (and parameter sweeps):
+  momentum         — lookback ∈ {3, 5, 8, 13, 21}                       (5)
+  mean_reversion   — z-score window ∈ {10, 20, 40}                      (3)
+  rsi_extreme      — period ∈ {7, 14, 21}                               (3)
+  sma_cross        — (fast, slow) ∈ {(5,20), (10,50), (20,100)}         (3)
+  ema_cross        — (fast, slow) ∈ {(8,21), (12,26), (20,50)}          (3)
+  bollinger_pos    — (period, k) ∈ {(20,2), (20,2.5), (50,2)}           (3)
+  donchian_break   — period ∈ {10, 20, 55}                              (3)
+  lr_slope         — period ∈ {10, 20, 40}                              (3)
+  arima            — period ∈ {20, 30, 50}                              (3)
+  combo_trend      — ensemble of trend members                          (1)
+  combo_meanrev    — ensemble of MR members                             (1)
+                                                                       ──
+                                                                Total = 31
 """
 from __future__ import annotations
 
 import json
+import math
 import sys
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
 
 sys.path.insert(0, "/home/nixos/Prod/V1/src")
 import signals_db as sdb  # noqa: E402
@@ -50,201 +54,246 @@ def _ema(values, period):
     if len(values) < period:
         return None
     k = 2 / (period + 1)
-    ema = sum(values[:period]) / period
+    e = sum(values[:period]) / period
     for v in values[period:]:
-        ema = v * k + ema * (1 - k)
-    return ema
+        e = v * k + e * (1 - k)
+    return e
 
 
-# ─── Models — each takes a list of bars, returns a directional score ────────
-def model_momentum(bars):
-    """5-bar return × 100. Bull >0, bear <0."""
-    closes = _closes(bars)
-    if len(closes) < 6 or closes[-6] == 0:
-        return None
-    return ((closes[-1] - closes[-6]) / closes[-6]) * 100
+# ─── Factory functions per family ───────────────────────────────────────────
+# Each returns a fn(bars) -> float|None scoring function configured with
+# the requested parameter combo. Wrapping in factories lets us run multiple
+# parameter variants in parallel within one tournament fire.
+
+def make_momentum(lookback: int):
+    """N-bar return × 100. Bull > 0, bear < 0."""
+    def fn(bars):
+        c = _closes(bars)
+        if len(c) < lookback + 1 or c[-(lookback + 1)] == 0: return None
+        return ((c[-1] - c[-(lookback + 1)]) / c[-(lookback + 1)]) * 100
+    return fn
 
 
-def model_mean_reversion(bars):
-    """20-bar z-score, sign-flipped. Stretched up → bear; stretched down → bull."""
-    closes = _closes(bars)
-    if len(closes) < 20:
-        return None
-    window = closes[-20:]
-    mean = sum(window) / 20
-    var  = sum((c - mean) ** 2 for c in window) / 20
-    sd   = var ** 0.5
-    if sd <= 0:
-        return None
-    z = (closes[-1] - mean) / sd
-    return -z * 50
+def make_mean_reversion(window: int):
+    """Z-score, sign-flipped. Stretched up → bear; stretched down → bull."""
+    def fn(bars):
+        c = _closes(bars)
+        if len(c) < window: return None
+        w = c[-window:]
+        m = sum(w) / window
+        sd = (sum((x - m) ** 2 for x in w) / window) ** 0.5
+        if sd <= 0: return None
+        return -((c[-1] - m) / sd) * 50
+    return fn
 
 
-def model_rsi_extreme(bars, period=14):
-    """RSI extreme reversion: RSI<30 → bull score, RSI>70 → bear score."""
-    closes = _closes(bars)
-    if len(closes) < period + 1:
-        return None
-    g = l = 0.0
-    for i in range(len(closes) - period, len(closes)):
-        d = closes[i] - closes[i - 1]
-        if d > 0: g += d
-        else:     l += -d
-    if l == 0: return -50.0
-    rs  = (g / period) / (l / period)
-    rsi = 100 - (100 / (1 + rs))
-    if rsi < 30:  return min(100, (30 - rsi) * 5)
-    if rsi > 70:  return max(-100, -(rsi - 70) * 5)
-    return 0.0
+def make_rsi_extreme(period: int):
+    """RSI extreme reversion: RSI < 30 → bull, RSI > 70 → bear."""
+    def fn(bars):
+        c = _closes(bars)
+        if len(c) < period + 1: return None
+        g = l = 0.0
+        for i in range(len(c) - period, len(c)):
+            d = c[i] - c[i - 1]
+            if d > 0: g += d
+            else:     l += -d
+        if l == 0: return -50.0
+        rs  = (g / period) / (l / period)
+        rsi = 100 - (100 / (1 + rs))
+        if rsi < 30: return min(100, (30 - rsi) * 5)
+        if rsi > 70: return max(-100, -(rsi - 70) * 5)
+        return 0.0
+    return fn
 
 
-def model_sma_cross(bars):
-    """SMA-5 vs SMA-20: positive when fast > slow (golden cross territory)."""
-    closes = _closes(bars)
-    if len(closes) < 20:
-        return None
-    sma5  = sum(closes[-5:])  / 5
-    sma20 = sum(closes[-20:]) / 20
-    if sma20 == 0: return None
-    return max(-100.0, min(100.0, ((sma5 - sma20) / sma20) * 100))
+def make_sma_cross(fast: int, slow: int):
+    """SMA(fast) vs SMA(slow): positive when fast > slow (golden cross zone)."""
+    def fn(bars):
+        c = _closes(bars)
+        if len(c) < slow: return None
+        sf = sum(c[-fast:]) / fast
+        ss = sum(c[-slow:]) / slow
+        if ss == 0: return None
+        return max(-100.0, min(100.0, ((sf - ss) / ss) * 100))
+    return fn
 
 
-def model_ema_cross(bars):
-    """MACD-style: (EMA12 − EMA26) / EMA26 × 100, clipped to ±100."""
-    closes = _closes(bars)
-    if len(closes) < 26:
-        return None
-    ema12 = _ema(closes[-26:], 12)
-    ema26 = _ema(closes[-26:], 26)
-    if ema12 is None or ema26 is None or ema26 == 0:
-        return None
-    return max(-100.0, min(100.0, ((ema12 - ema26) / ema26) * 100))
+def make_ema_cross(fast: int, slow: int):
+    """EMA(fast) vs EMA(slow) — MACD-style trend score."""
+    def fn(bars):
+        c = _closes(bars)
+        if len(c) < slow: return None
+        ef = _ema(c[-slow:], fast)
+        es = _ema(c[-slow:], slow)
+        if ef is None or es is None or es == 0: return None
+        return max(-100.0, min(100.0, ((ef - es) / es) * 100))
+    return fn
 
 
-def model_bollinger_position(bars, period=20, k=2.0):
-    """
-    Position within ±k·σ band, sign-flipped:
-      price at upper band → -100 (overbought, bear)
-      price at lower band → +100 (oversold, bull)
-      price at midline    →    0
-    """
-    closes = _closes(bars)
-    if len(closes) < period:
-        return None
-    window = closes[-period:]
-    mean = sum(window) / period
-    var  = sum((c - mean) ** 2 for c in window) / period
-    sd   = var ** 0.5
-    if sd <= 0: return None
-    upper = mean + k * sd
-    lower = mean - k * sd
-    if upper == lower: return 0.0
-    pos = (closes[-1] - mean) / (k * sd)   # ~ -1 .. +1 inside band
-    return max(-100.0, min(100.0, -pos * 100))
+def make_bollinger_pos(period: int = 20, k: float = 2.0):
+    """Position within ±k·σ band, sign-flipped (upper → bear, lower → bull)."""
+    def fn(bars):
+        c = _closes(bars)
+        if len(c) < period: return None
+        w = c[-period:]
+        m = sum(w) / period
+        sd = (sum((x - m) ** 2 for x in w) / period) ** 0.5
+        if sd <= 0: return None
+        pos = (c[-1] - m) / (k * sd)
+        return max(-100.0, min(100.0, -pos * 100))
+    return fn
 
 
-def model_donchian_breakout(bars, period=20):
-    """
-    20-bar Donchian breakout strength:
-      close above prior 20-bar high → bull (proportional to overshoot)
-      close below prior 20-bar low  → bear
-      inside channel → 0
-    """
-    closes = _closes(bars)
-    if len(closes) < period + 1:
-        return None
-    prior = closes[-(period + 1):-1]
-    hi = max(prior); lo = min(prior)
-    if hi == lo: return 0.0
-    last = closes[-1]
-    if last > hi:
-        # overshoot vs channel width
-        return min(100.0, (last - hi) / (hi - lo) * 100)
-    if last < lo:
-        return max(-100.0, (last - lo) / (hi - lo) * 100)
-    # inside channel — neutral
-    return 0.0
+def make_donchian_break(period: int = 20):
+    """Donchian breakout: close above/below prior N-bar high/low, proportional."""
+    def fn(bars):
+        c = _closes(bars)
+        if len(c) < period + 1: return None
+        prior = c[-(period + 1):-1]
+        hi = max(prior); lo = min(prior)
+        if hi == lo: return 0.0
+        last = c[-1]
+        if last > hi: return min(100.0, (last - hi) / (hi - lo) * 100)
+        if last < lo: return max(-100.0, (last - lo) / (hi - lo) * 100)
+        return 0.0
+    return fn
 
 
-def model_lr_slope(bars, period=20):
-    """
-    20-bar linear-regression slope on closes, normalized by mean price → %/bar.
-    Positive = uptrend, negative = downtrend. Multiplied by period and clipped.
-    """
-    closes = _closes(bars)
-    if len(closes) < period:
-        return None
-    y = closes[-period:]
-    n = period
-    xs = list(range(n))
-    mean_x = (n - 1) / 2
-    mean_y = sum(y) / n
-    num = sum((xs[i] - mean_x) * (y[i] - mean_y) for i in range(n))
-    den = sum((xs[i] - mean_x) ** 2 for i in range(n))
-    if den == 0 or mean_y == 0:
-        return None
-    slope = num / den               # price units per bar
-    pct_per_bar = slope / mean_y * 100
-    # Project over the period for a comparable scale, clip ±100
-    return max(-100.0, min(100.0, pct_per_bar * period))
+def make_lr_slope(period: int = 20):
+    """N-bar linear regression slope (% per bar × period), clipped ±100."""
+    def fn(bars):
+        c = _closes(bars)
+        if len(c) < period: return None
+        y = c[-period:]
+        n = period
+        xs = list(range(n))
+        mx = (n - 1) / 2
+        my = sum(y) / n
+        num = sum((xs[i] - mx) * (y[i] - my) for i in range(n))
+        den = sum((xs[i] - mx) ** 2 for i in range(n))
+        if den == 0 or my == 0: return None
+        slope = num / den
+        pct_per_bar = slope / my * 100
+        return max(-100.0, min(100.0, pct_per_bar * period))
+    return fn
 
 
-def model_arima_1(bars, period=30):
-    """
-    AR(1) on log-returns. Fit r_t = c + φ·r_{t-1} on last `period` bars,
-    score = forecasted next-bar return × 100 (directional).
-    """
-    import math
-    closes = _closes(bars)
-    if len(closes) < period + 2:
-        return None
-    series = closes[-(period + 1):]
-    rets = []
-    for i in range(1, len(series)):
-        if series[i - 1] <= 0 or series[i] <= 0:
-            return None
-        rets.append(math.log(series[i] / series[i - 1]))
-    if len(rets) < 5:
-        return None
-    # OLS: r_t = c + φ · r_{t-1}
-    x = rets[:-1]; y = rets[1:]
-    n = len(x)
-    mx = sum(x) / n; my = sum(y) / n
-    num = sum((x[i] - mx) * (y[i] - my) for i in range(n))
-    den = sum((x[i] - mx) ** 2 for i in range(n))
-    if den == 0: return None
-    phi = num / den
-    c   = my - phi * mx
-    forecast = c + phi * rets[-1]      # next-bar log return
-    return max(-100.0, min(100.0, forecast * 100 * 100))  # log-ret × 10,000 bps-ish, clipped
+def make_arima(period: int = 30):
+    """AR(1) on log-returns over the trailing N bars; score = next-bar log-return × 10,000."""
+    def fn(bars):
+        c = _closes(bars)
+        if len(c) < period + 2: return None
+        series = c[-(period + 1):]
+        rets = []
+        for i in range(1, len(series)):
+            if series[i - 1] <= 0 or series[i] <= 0: return None
+            rets.append(math.log(series[i] / series[i - 1]))
+        if len(rets) < 5: return None
+        x = rets[:-1]; y = rets[1:]
+        n = len(x)
+        mx = sum(x) / n; my = sum(y) / n
+        num = sum((x[i] - mx) * (y[i] - my) for i in range(n))
+        den = sum((x[i] - mx) ** 2 for i in range(n))
+        if den == 0: return None
+        phi = num / den
+        c0 = my - phi * mx
+        forecast = c0 + phi * rets[-1]
+        return max(-100.0, min(100.0, forecast * 100 * 100))
+    return fn
 
 
-def model_combo_trend(bars):
-    """Equal-weight ensemble of trend models (sma_cross, ema_cross, lr_slope, donchian)."""
-    parts = [
-        model_sma_cross(bars),
-        model_ema_cross(bars),
-        model_lr_slope(bars),
-        model_donchian_breakout(bars),
-    ]
-    valid = [p for p in parts if p is not None]
-    if len(valid) < 2:
-        return None
-    return sum(valid) / len(valid)
+def make_combo_trend(member_fns):
+    """Equal-weight ensemble of trend members. Returns None if < 2 members fired."""
+    def fn(bars):
+        parts = []
+        for f in member_fns:
+            try:
+                v = f(bars)
+                if v is not None: parts.append(v)
+            except Exception:
+                continue
+        if len(parts) < 2: return None
+        return sum(parts) / len(parts)
+    return fn
 
 
 # ─── Tournament roster ──────────────────────────────────────────────────────
+# (model_name, family, score_fn) — model_name is the signal_name persisted
+# to the DB; family groups variants together in the UI / leaderboard.
+#
+# IMPORTANT: existing model_name strings are PRESERVED so historical
+# leaderboard data continues to count for those entrants. New variants
+# are added alongside under the same family.
+
+# Build family member fns first so combo_trend can reference them
+_sma_5_20    = make_sma_cross(5, 20)
+_sma_10_50   = make_sma_cross(10, 50)
+_sma_20_100  = make_sma_cross(20, 100)
+_ema_8_21    = make_ema_cross(8, 21)
+_ema_12_26   = make_ema_cross(12, 26)
+_ema_20_50   = make_ema_cross(20, 50)
+_lr_10       = make_lr_slope(10)
+_lr_20       = make_lr_slope(20)
+_lr_40       = make_lr_slope(40)
+_donch_10    = make_donchian_break(10)
+_donch_20    = make_donchian_break(20)
+_donch_55    = make_donchian_break(55)
+_mr_10       = make_mean_reversion(10)
+_mr_20       = make_mean_reversion(20)
+_mr_40       = make_mean_reversion(40)
+_rsi_7       = make_rsi_extreme(7)
+_rsi_14      = make_rsi_extreme(14)
+_rsi_21      = make_rsi_extreme(21)
+_boll_20_2   = make_bollinger_pos(20, 2.0)
+_boll_20_25  = make_bollinger_pos(20, 2.5)
+_boll_50     = make_bollinger_pos(50, 2.0)
+
 MODELS = [
-    ("momentum_5bar",     model_momentum),
-    ("mean_rev_20",       model_mean_reversion),
-    ("rsi_extreme_14",    model_rsi_extreme),
-    ("sma_cross_5_20",    model_sma_cross),
-    ("ema_cross_12_26",   model_ema_cross),
-    ("bollinger_pos_20",  model_bollinger_position),
-    ("donchian_break_20", model_donchian_breakout),
-    ("lr_slope_20",       model_lr_slope),
-    ("arima_1",           model_arima_1),
-    ("combo_trend",       model_combo_trend),
+    # ─ momentum family (5 variants)
+    ("momentum_3bar",      "momentum",        make_momentum(3)),
+    ("momentum_5bar",      "momentum",        make_momentum(5)),
+    ("momentum_8bar",      "momentum",        make_momentum(8)),
+    ("momentum_13bar",     "momentum",        make_momentum(13)),
+    ("momentum_21bar",     "momentum",        make_momentum(21)),
+    # ─ mean reversion family (3)
+    ("mean_rev_10",        "mean_reversion",  _mr_10),
+    ("mean_rev_20",        "mean_reversion",  _mr_20),
+    ("mean_rev_40",        "mean_reversion",  _mr_40),
+    # ─ rsi extreme family (3)
+    ("rsi_extreme_7",      "rsi_extreme",     _rsi_7),
+    ("rsi_extreme_14",     "rsi_extreme",     _rsi_14),
+    ("rsi_extreme_21",     "rsi_extreme",     _rsi_21),
+    # ─ SMA cross family (3)
+    ("sma_cross_5_20",     "sma_cross",       _sma_5_20),
+    ("sma_cross_10_50",    "sma_cross",       _sma_10_50),
+    ("sma_cross_20_100",   "sma_cross",       _sma_20_100),
+    # ─ EMA cross family (3)
+    ("ema_cross_8_21",     "ema_cross",       _ema_8_21),
+    ("ema_cross_12_26",    "ema_cross",       _ema_12_26),
+    ("ema_cross_20_50",    "ema_cross",       _ema_20_50),
+    # ─ Bollinger position family (3)
+    ("bollinger_pos_20",     "bollinger_pos", _boll_20_2),
+    ("bollinger_pos_20_k25", "bollinger_pos", _boll_20_25),
+    ("bollinger_pos_50",     "bollinger_pos", _boll_50),
+    # ─ Donchian breakout family (3)
+    ("donchian_break_10",  "donchian_break",  _donch_10),
+    ("donchian_break_20",  "donchian_break",  _donch_20),
+    ("donchian_break_55",  "donchian_break",  _donch_55),
+    # ─ LR slope family (3)
+    ("lr_slope_10",        "lr_slope",        _lr_10),
+    ("lr_slope_20",        "lr_slope",        _lr_20),
+    ("lr_slope_40",        "lr_slope",        _lr_40),
+    # ─ ARIMA family (3)
+    ("arima_20",           "arima",           make_arima(20)),
+    ("arima_1",            "arima",           make_arima(30)),  # legacy name — period=30
+    ("arima_50",           "arima",           make_arima(50)),
+    # ─ Ensembles (2)
+    ("combo_trend",        "ensemble",
+        make_combo_trend([_sma_5_20, _sma_10_50, _ema_12_26, _ema_20_50,
+                          _lr_20, _lr_40, _donch_20, _donch_55])),
+    ("combo_meanrev",      "ensemble",
+        make_combo_trend([_mr_10, _mr_20, _mr_40, _rsi_7, _rsi_14, _rsi_21,
+                          _boll_20_2, _boll_50])),
 ]
 
 
@@ -260,19 +309,22 @@ def main():
 
     # Tag every fire of this batch with the current market regime so the
     # leaderboard can compute IC stratified by regime later. Same regime is
-    # written to every model's run in this batch (they all fire at the same
-    # moment, so they share the regime).
+    # written to every model's run in this batch.
     regime = regime_tag.compute_regime()
     print(f"[models] regime: {regime['regime_label']}  (vix={regime['vix']}, spy_5d={regime['spy_5d_pct']}%)")
+    print(f"[models] {len(MODELS)} entrants across families: "
+          f"{sorted({m[1] for m in MODELS})}")
 
     runs = {}
     n_signals = 0
-    for model_name, fn in MODELS:
+    for model_name, family, fn in MODELS:
         run_id = sdb.record_run(
             run_type="model_score",
-            config={"model": model_name, "bbg_age": bbg.get("generated_at"),
+            config={"model":       model_name,
+                    "family":      family,
+                    "bbg_age":     bbg.get("generated_at"),
                     "n_watchlist": len(watchlist),
-                    "regime": regime},
+                    "regime":      regime},
         )
         if not run_id:
             print(f"[models] DB unavailable — skipping {model_name}")
@@ -303,8 +355,6 @@ def main():
                                             if w and not w.get("error") and w.get("bars")]))
 
     print(f"[models] {len(runs)} models scored · {n_signals} signal rows captured")
-    for name, rid in runs.items():
-        print(f"  {name:20s} run_id={rid}")
 
 
 if __name__ == "__main__":

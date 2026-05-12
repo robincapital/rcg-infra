@@ -1945,6 +1945,8 @@
         <th title="AVG REALIZED\nAverage realized return % over all captured pairs for this (model, horizon). Should track with IC × Avg|score| — a high-IC model that takes loud positions on bull names should have positive avg realized.">Avg realized</th>
       </tr></thead><tbody>`;
 
+    // Per-horizon, collapse rows by family. Champion surfaces; challengers
+    // are hidden until the family row is expanded.
     horizons.forEach(h => {
       html += `<tr class="leaderboard-section"><td colspan="8">Horizon: ${h}</td></tr>`;
       const rows = byHorizon[h] || [];
@@ -1952,12 +1954,38 @@
         html += `<tr><td colspan="8" class="empty">no entrants yet</td></tr>`;
         return;
       }
-      rows.forEach((r, idx) => {
+      // Bucket by family
+      const byFamily = new Map();
+      rows.forEach(r => {
+        const fam = r.family || 'other';
+        if (!byFamily.has(fam)) byFamily.set(fam, []);
+        byFamily.get(fam).push(r);
+      });
+      // Pick best variant per family (or the family entry itself if just one)
+      const familyRows = [];
+      byFamily.forEach((variants, fam) => {
+        variants.sort((a, b) => (b.ic_directional ?? -2) - (a.ic_directional ?? -2));
+        familyRows.push({ family: fam, champion: variants[0], challengers: variants.slice(1) });
+      });
+      // Sort families by their champion's IC
+      familyRows.sort((a, b) => (b.champion.ic_directional ?? -2) - (a.champion.ic_directional ?? -2));
+
+      familyRows.forEach((fr, idx) => {
+        const r = fr.champion;
         const ic = r.ic_directional;
         const cls = idx === 0 && (ic ?? 0) > 0.05 ? 'hi-ic' :
-                    idx === rows.length - 1 && (ic ?? 0) < -0.05 ? 'lo-ic' : '';
-        html += `<tr class="${cls}">
-          <td class="lab">${r.model}</td>
+                    idx === familyRows.length - 1 && (ic ?? 0) < -0.05 ? 'lo-ic' : '';
+        const hasChallengers = fr.challengers.length > 0;
+        const familyId = `fam-${h}-${fr.family}`;
+        const badge = hasChallengers
+          ? `<span style="color:var(--dim);font-size:9px;margin-left:4px">▸ ${fr.challengers.length} more</span>`
+          : '';
+        // Champion row (always visible)
+        html += `<tr class="${cls} family-champion" data-family-row="${familyId}" style="cursor:${hasChallengers ? 'pointer' : 'default'}">
+          <td class="lab">
+            <span style="color:var(--gold);margin-right:3px" title="Family: ${fr.family} (champion = highest IC variant in this family for this horizon)">●</span>
+            ${r.model}${badge}
+          </td>
           <td class="num">${r.n}</td>
           <td class="num">${r.n_strong ?? '—'}</td>
           <td class="num ${r.hit_rate != null && r.hit_rate >= 0.55 ? 'ic-cell pos' :
@@ -1969,18 +1997,55 @@
           <td class="num">${r.avg_score_abs ?? '—'}</td>
           <td class="num ic-cell ${icClass((r.avg_realized ?? 0) / 100)}">${r.avg_realized != null ? (r.avg_realized >= 0 ? '+' : '') + r.avg_realized.toFixed(3) + '%' : '—'}</td>
         </tr>`;
+        // Challenger rows — collapsed by default, shown when champion row clicked
+        fr.challengers.forEach(c => {
+          const cIc = c.ic_directional;
+          html += `<tr class="family-challenger ${familyId}" style="display:none;background:rgba(255,255,255,0.02)">
+            <td class="lab" style="padding-left:24px;color:var(--dim);font-size:10px">↳ ${c.model}</td>
+            <td class="num dim" style="font-size:10px">${c.n}</td>
+            <td class="num dim" style="font-size:10px">${c.n_strong ?? '—'}</td>
+            <td class="num dim ${c.hit_rate != null && c.hit_rate >= 0.55 ? 'ic-cell pos' :
+                                c.hit_rate != null && c.hit_rate <= 0.45 ? 'ic-cell neg' : 'ic-cell dim'}" style="font-size:10px">
+              ${c.hit_rate != null ? (c.hit_rate * 100).toFixed(1) + '%' : '—'}
+            </td>
+            <td class="num ic-cell ${icClass(cIc)}" style="font-size:10px">${fmtIC(cIc)}</td>
+            <td class="num ic-cell ${icClass(c.ic_spearman)}" style="font-size:10px">${fmtIC(c.ic_spearman)}</td>
+            <td class="num dim" style="font-size:10px">${c.avg_score_abs ?? '—'}</td>
+            <td class="num ic-cell ${icClass((c.avg_realized ?? 0) / 100)}" style="font-size:10px">${c.avg_realized != null ? (c.avg_realized >= 0 ? '+' : '') + c.avg_realized.toFixed(3) + '%' : '—'}</td>
+          </tr>`;
+        });
       });
     });
 
     html += '</tbody></table>';
     wrap.innerHTML = html;
 
+    // Family expand/collapse on champion-row click
+    wrap.querySelectorAll('.family-champion[data-family-row]').forEach(row => {
+      row.addEventListener('click', () => {
+        const id = row.dataset.familyRow;
+        const challengers = wrap.querySelectorAll('.family-challenger.' + id);
+        if (!challengers.length) return;
+        const isOpen = challengers[0].style.display !== 'none';
+        challengers.forEach(c => c.style.display = isOpen ? 'none' : '');
+        // Flip the ▸ to ▾ in the badge
+        const badge = row.querySelector('td.lab span:last-child');
+        if (badge && badge.textContent.includes('more')) {
+          badge.textContent = badge.textContent.replace(/▸|▾/, isOpen ? '▸' : '▾');
+        }
+      });
+    });
+
     const meta = document.getElementById('leaderboard-meta');
     if (meta) {
       const ts = leaderboardData.generated_at;
       const totalN = results.reduce((a, r) => a + (r.n || 0), 0);
-      meta.innerHTML = `Computed ${ts ? new Date(ts).toLocaleString() : '—'} · ${totalN} total prediction-outcome pairs across all models · ` +
-        `<span style="color:var(--gold)">Need ~5+ days of data per model for reliable IC.</span> ` +
+      const familySet = new Set(results.map(r => r.family).filter(Boolean));
+      const entrantSet = new Set(results.map(r => r.model));
+      meta.innerHTML = `Computed ${ts ? new Date(ts).toLocaleString() : '—'} · ` +
+        `<b>${entrantSet.size} entrants</b> across <b>${familySet.size} families</b> · ` +
+        `${totalN.toLocaleString()} total prediction-outcome pairs · ` +
+        `<span style="color:var(--gold)">Click any family row to expand its challenger variants.</span> ` +
         `Tournament refreshes daily after the morning forward-returns pass.`;
     }
   }
