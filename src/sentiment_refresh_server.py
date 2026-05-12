@@ -185,18 +185,39 @@ def compute_pt_payload(ticker: str, overrides: dict | None) -> dict:
         debt_series=f["debt_series"],
     )
 
-    # Live price from bbg snapshot if available; fall back to last marketcap-implied price
+    # Resolve live price via 3-tier fallback:
+    #   1. Bloomberg watchlist snapshot (most current — intraday)
+    #   2. Screener CSV last_price (EOD close from Sharadar SEP, ~1 day stale)
+    #   3. None — engine still runs but PT/upside will be marked unavailable
     live_price = None
+    price_source = None
     try:
         bbg = json.loads(Path("/home/nixos/Prod/V1/src/bloomberg_prices.json").read_text())
         w = (bbg.get("watchlist") or {}).get(ticker.upper(), {})
-        live_price = w.get("price")
+        p = w.get("price")
+        if p and p > 0:
+            live_price = float(p)
+            price_source = "bbg_live"
     except Exception:
         pass
-    if not live_price and f.get("marketcap"):
-        # Fall back to marketcap / inferred shares — gives a sane PT but display
-        # the limitation so the user knows.
-        live_price = 100.0  # placeholder; engine will still run
+    if not live_price:
+        try:
+            import csv as _csv
+            with open("/home/nixos/Prod/V1/outputs/screener_universe.csv") as fh:
+                for row in _csv.DictReader(fh):
+                    if (row.get("ticker") or "").upper() == ticker.upper():
+                        lp = row.get("last_price")
+                        if lp:
+                            live_price = float(lp)
+                            price_source = "screener_eod"
+                        break
+        except Exception:
+            pass
+    if not live_price:
+        # Absolute last resort — engine needs SOMETHING. Mark explicitly so the
+        # dashboard / report can flag the PT as unreliable.
+        live_price = 100.0
+        price_source = "placeholder"
 
     # Run engine — with AND without overrides, so the response shows both
     r_default = compute_target_price(
@@ -221,6 +242,7 @@ def compute_pt_payload(ticker: str, overrides: dict | None) -> dict:
         "latest_datekey":  f["latest_datekey"],
         "n_quarters":      f["n_quarters"],
         "live_price":      live_price,
+        "price_source":    price_source,   # 'bbg_live' | 'screener_eod' | 'placeholder'
         "baseline":        base,
         "overrides":       overrides or {k: None for k in _OVERRIDE_KEYS},
         "pt_engine_default": {
@@ -697,10 +719,13 @@ def build_report(ticker: str) -> dict:
     rubric = compute_valuation_rubric(pt_payload)
 
     # LLM narration — cached on the assumptions record so we don't re-burn API
-    # calls. Cache key = (rating, target_price) so it invalidates whenever
-    # either changes.
+    # calls. Cache key = (rating, target_price, rounded live_price). Including
+    # live_price invalidates the cache when the price feed becomes fresh
+    # (e.g. ticker was hitting the $100 placeholder before BBG started
+    # capturing it).
     pt_block = pt_payload.get("pt_with_overrides") or pt_payload.get("pt_engine_default") or {}
-    cache_key = f"{rubric['rating']}::{pt_block.get('target_price')}"
+    _lp_round = round(pt_payload.get("live_price") or 0, 0)
+    cache_key = f"{rubric['rating']}::{pt_block.get('target_price')}::{_lp_round}"
     cached_key = stored.get("llm_cache_key")
     cached_text = stored.get("llm_summary")
 

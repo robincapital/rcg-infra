@@ -544,7 +544,47 @@
     <span style="margin-left:auto"></span>
     <a class="nav-link" href="dynamic_factor_screener.html">Full screener →</a>
     <a class="nav-link" href="market_sentiment_bbg.html">Macro / Sentiment →</a>
+    <button class="refresh-btn" id="how-to-read-btn" style="background:var(--panel2);color:var(--gold);border:1px solid var(--gold)">How to read</button>
     <button class="refresh-btn" id="refresh-btn">Force pull</button>
+  </div>
+</div>
+
+<!-- How to read this dashboard — toggled by the "How to read" button -->
+<div id="how-to-read" style="display:none; margin: 0 1rem 0.7rem; padding: 0.8rem 1rem; background: var(--panel2); border: 1px solid var(--gold); border-radius: 4px; font-size: 12px; line-height: 1.5;">
+  <h3 style="margin: 0 0 0.5rem; font-size: 11px; color: var(--gold); text-transform: uppercase; letter-spacing: 0.5px; display: flex; justify-content: space-between; align-items: center;">
+    <span>How to read this dashboard</span>
+    <span id="how-to-read-close" style="cursor:pointer;color:var(--red);font-size:11px">[close]</span>
+  </h3>
+  <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 1.2rem;">
+    <div>
+      <strong style="color:var(--gold)">Two independent signal layers:</strong>
+      <ul style="margin: 0.3rem 0 0.6rem; padding-left: 1.2rem;">
+        <li><strong style="color:var(--green)">Fundamental upside</strong> (Target Px, Upside %, Composite) — long-term valuation thesis from price_targets engine. Updates daily.</li>
+        <li><strong style="color:var(--blue)">Short-term technical</strong> (Pred score, Signal bars, Action label) — intraday momentum / mean-reversion from BBG bars. Updates every 30 min during market hours.</li>
+      </ul>
+      <strong style="color:var(--gold)">Action labels (technical, ~30min–4h horizon):</strong>
+      <ul style="margin: 0.3rem 0; padding-left: 1.2rem; font-size:11px;">
+        <li><span class="badge badge-pre">PRE-BREAKOUT</span> · <span class="badge badge-breakout">BREAKOUT</span> · <span class="badge badge-strong">STRONG</span> — bull momentum</li>
+        <li><span class="badge badge-watch">WATCH</span> · <span class="badge badge-noise">NEUTRAL</span> — no conviction</li>
+        <li><span class="badge badge-weakening">WEAKENING</span> · <span class="badge badge-prebreakdown">PRE-BREAKDOWN</span> · <span class="badge badge-breakdown">BREAKDOWN</span> — bear momentum</li>
+      </ul>
+    </div>
+    <div>
+      <strong style="color:var(--gold)">Combining the two layers for highest-conviction trades:</strong>
+      <table style="width:100%; border-collapse: collapse; font-size: 11px; margin-top: 0.3rem;">
+        <thead><tr><th style="padding:3px 6px;color:var(--dim);text-align:left;">Upside</th><th style="padding:3px 6px;color:var(--dim);text-align:left;">Action</th><th style="padding:3px 6px;color:var(--dim);text-align:left;">Read</th></tr></thead>
+        <tbody>
+          <tr><td style="padding:3px 6px;" class="up">+</td><td style="padding:3px 6px;color:var(--green);">STRONG / BREAKOUT</td><td style="padding:3px 6px;color:var(--gold);font-weight:bold">★ LONG — value + momentum aligned</td></tr>
+          <tr><td style="padding:3px 6px;" class="up">+</td><td style="padding:3px 6px;color:var(--red);">WEAKENING / BREAKDOWN</td><td style="padding:3px 6px;color:var(--orange);">Value trap risk — wait</td></tr>
+          <tr><td style="padding:3px 6px;" class="down">−</td><td style="padding:3px 6px;color:var(--red);">WEAKENING / BREAKDOWN</td><td style="padding:3px 6px;color:var(--gold);font-weight:bold">★ SHORT — overvalued + tape confirms</td></tr>
+          <tr><td style="padding:3px 6px;" class="down">−</td><td style="padding:3px 6px;color:var(--green);">STRONG / BREAKOUT</td><td style="padding:3px 6px;color:var(--orange);">Momentum chasing rich — wait for break</td></tr>
+          <tr><td style="padding:3px 6px;color:var(--dim);">either</td><td style="padding:3px 6px;color:var(--dim);">NEUTRAL</td><td style="padding:3px 6px;color:var(--dim);">No edge — skip</td></tr>
+        </tbody>
+      </table>
+      <div style="margin-top: 0.5rem; font-size: 10px; color: var(--dim);">
+        <strong>Hover any column header</strong> for a detailed explanation of what it means and how it's computed. Same for the Model Tournament leaderboard.
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1168,7 +1208,7 @@
       <div class="rep-rec ${ratingCls}">
         <span class="label ${ratingCls}">${rub.rating || 'HOLD'}</span>
         <div class="px-line">
-          Live: <b>${fmtPtCell(livePx)}</b>
+          Live: <b>${fmtPtCell(livePx)}</b>${pp.price_source === 'screener_eod' ? ' <span style="color:var(--rcg-gold);font-size:9px">EOD</span>' : ''}${pp.price_source === 'placeholder' ? ' <span style="color:var(--rcg-red);font-size:9px">PLACEHOLDER</span>' : ''}
           &nbsp;→&nbsp; Target: <b>${fmtPtCell(pt)}</b>
           &nbsp;<span style="color:${(upside||0) >= 0 ? 'var(--rcg-green)' : 'var(--rcg-red)'}">${upside == null ? '' : (upside >= 0 ? '+' : '') + upside.toFixed(1) + '%'}</span>
           &nbsp;<span style="color:var(--rcg-text-dim);font-size:10px">PT source ${rub.pt_source || 'N/A'} · Quality ${(rub.quality != null) ? (+rub.quality).toFixed(2) : '—'}${hasUserPT ? ' · USER ASSUMPTIONS' : ''}</span>
@@ -1836,9 +1876,14 @@
 
     let html = `<table class="leaderboard-table">
       <thead><tr>
-        <th class="lab">Model</th><th>n</th><th>n-strong</th>
-        <th>Hit-rate (sign-match)</th><th>IC (directional)</th><th>IC (Spearman)</th>
-        <th>Avg |score|</th><th>Avg realized</th>
+        <th class="lab" title="MODEL\nA model is one entrant in the tournament. Each fires every 30 min during market hours, scores every watchlist ticker, and writes its score to the signals table. Forward-return capture joins the score to the realized 30/60/240-min return. The leaderboard shows how well each entrant's score predicts the future return direction.">Model</th>
+        <th title="N (SAMPLE SIZE)\nNumber of (score, realized_return) pairs we've captured for this (model, horizon). The bigger the number, the more reliable the IC. Below ~50 the values are noisy; above ~500 they start to mean something.">n</th>
+        <th title="N-STRONG\nSubset of N where |score| >= 5 (the model wasn't sitting at zero / had genuine conviction). Hit-rate is computed over this subset, not over all N — neutral scores aren't predictions and shouldn't count.">n-strong</th>
+        <th title="HIT-RATE (sign-match)\nOf the strong predictions, what fraction had sign(score) == sign(realized_return)?\n  > 55% = consistently right side of the trade\n  ~50%  = coin flip / no edge\n  < 45% = consistently wrong (could invert into a bear signal)">Hit-rate (sign-match)</th>
+        <th title="IC DIRECTIONAL\nDirectional information coefficient: mean of (sign(score) × sign(realized_return)) across all N pairs.\nRange [-1, +1].\n  +0.10+ = strong edge\n  +0.03–0.10 = modest edge\n  ~0   = no edge\n  negative = the model is consistently wrong; could be inverted as a bear signal">IC (directional)</th>
+        <th title="IC SPEARMAN\nSpearman rank correlation between scores and realized returns. Captures whether higher scores → higher returns (not just sign agreement). Less noisy than directional IC for ranked-style models. Computed only when n >= 5.">IC (Spearman)</th>
+        <th title="AVG |SCORE|\nAverage absolute model score. Tells you how 'loud' a model tends to be — high values means the model frequently has strong conviction; low values means it's often near zero. Pair with hit-rate: a model that's loud AND right is the best entrant.">Avg |score|</th>
+        <th title="AVG REALIZED\nAverage realized return % over all captured pairs for this (model, horizon). Should track with IC × Avg|score| — a high-IC model that takes loud positions on bull names should have positive avg realized.">Avg realized</th>
       </tr></thead><tbody>`;
 
     horizons.forEach(h => {
@@ -2853,6 +2898,19 @@ Signal: ${m.insSignal ?? 'neutral'}`;
       }, 18000);
     });
   });
+
+  // ── How to read button ───────────────────────────────────────
+  const howBtn = document.getElementById('how-to-read-btn');
+  const howPanel = document.getElementById('how-to-read');
+  const howClose = document.getElementById('how-to-read-close');
+  if (howBtn && howPanel) {
+    howBtn.addEventListener('click', () => {
+      howPanel.style.display = (howPanel.style.display === 'none') ? 'block' : 'none';
+    });
+  }
+  if (howClose && howPanel) {
+    howClose.addEventListener('click', () => { howPanel.style.display = 'none'; });
+  }
 
   attachSortHandlers('movers-tbl', 'movers', renderMoversTable);
   attachSortHandlers('top-tbl',    'top',    renderTopTable);
