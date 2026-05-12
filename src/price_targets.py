@@ -699,7 +699,61 @@ def compute_target_price(
     # ── BLEND OR FALLBACK ────────────────────────────────────
     if not convictions:
         result.gates_fired.append("ALL_MODELS_DROPPED_BY_R2_FLOOR_OR_NEG_PROJ")
-        # Fall back to analyst target if available — no fundamental signal
+
+        # ─── Fallback A: trailing-median × sector multiples ────────
+        # When trend-based projection fails (R² ≈ 0 on every model — common for
+        # cyclicals, recently-public, post-merger, or noisy reporters), still
+        # give the user *something* by anchoring to the median of the trailing
+        # 8 quarters × sector multiples. MEDIAN, not mean, so an outlier
+        # quarter doesn't dominate. The result carries pt_source="FB" so the
+        # dashboard surfaces it as low-conviction.
+        rev_8q    = [v for v in (rev_raw or [])[-8:] if v is not None]
+        ebitda_8q = [v for v in (_clean(ebitda_series) or [])[-8:] if v is not None]
+        if rev_8q and ebitda_8q and len(rev_8q) >= 4 and len(ebitda_8q) >= 4:
+            med_rev    = float(np.median(rev_8q))
+            med_ebitda = float(np.median(ebitda_8q))
+            fb_pts = []
+            # EV/EBITDA fallback
+            if med_ebitda > 0:
+                ann = med_ebitda * 4
+                fb_target_eq = ann * sm["ev_ebitda"] - latest_debt + cash_on_hand
+                if fb_target_eq > 0:
+                    fb_pts.append(("ev_ebitda_fb", fb_target_eq / share_count))
+            # EV/Revenue fallback
+            if med_rev > 0:
+                ann = med_rev * 4
+                fb_target_eq = ann * sm["ev_rev"] - latest_debt + cash_on_hand
+                if fb_target_eq > 0:
+                    fb_pts.append(("ev_rev_fb", fb_target_eq / share_count))
+            if fb_pts:
+                # Average the surviving fallback PTs and apply a 0.5 conviction
+                # haircut on top of any quality haircut (so low-conviction PTs
+                # don't masquerade as production targets).
+                avg_pt = sum(p for _, p in fb_pts) / len(fb_pts)
+                fb_quality_haircut = 0.5   # explicit low-conviction discount
+                final_fb_pt = avg_pt * fb_quality_haircut
+                result.target_price = round(final_fb_pt, 2)
+                result.raw_target   = round(avg_pt, 2)
+                result.upside_pct   = round((final_fb_pt / last_price) - 1.0, 4)
+                result.upside_score = float(np.clip(result.upside_pct, -1.0, 2.0))
+                result.pt_source    = "FB"    # fallback — surfaced specially in the report
+                # Embed which fallback paths fired into the breakdown so the
+                # report can show them
+                result.breakdown = {
+                    **(result.breakdown or {}),
+                    "models": {name: {"pt": round(p, 2), "applied_cap": "TRAILING_MEDIAN_FB"} for name, p in fb_pts},
+                    "sector": (sm.get("sector") if isinstance(sm, dict) else None),
+                    "fallback_window_quarters": min(len(rev_8q), len(ebitda_8q)),
+                    "fallback_quality_haircut": fb_quality_haircut,
+                }
+                result.quality_score   = round((quality or 0.7) * fb_quality_haircut, 3)
+                result.quality_haircut = round(1.0 - fb_quality_haircut, 3)
+                result.gates_fired.append(
+                    f"TRAILING_MEDIAN_FALLBACK:n={min(len(rev_8q),len(ebitda_8q))}q"
+                )
+                return result
+
+        # ─── Fallback B: analyst consensus if no fundamental signal ──
         if (analyst_target and analyst_target > 0
                 and n_analysts >= ANALYST_MIN_N
                 and apply_envelope):

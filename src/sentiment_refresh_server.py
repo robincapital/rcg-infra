@@ -397,24 +397,17 @@ def compute_valuation_rubric(pt_payload: dict) -> dict:
     gates       = pt_block.get("gates_fired") or []
     quality     = pt_block.get("quality_score") or (pt_block.get("breakdown") or {}).get("quality_score")
 
-    # ── Special case: engine produced no PT (all models dropped) ──
-    # This is NOT a SELL — it's "we can't model this reliably." Common for:
-    #   · Pre-revenue companies (biotech, SPACs)
-    #   · Companies with no consistent fundamental trend (cyclicals at turning points,
-    #     restructurings, freshly-public, M&A targets)
-    #   · Names with too few reported quarters even though SF1 has rows
-    if target_price is None or "ALL_MODELS_DROPPED" in " ".join(gates):
-        # Friendly explanation of what went wrong
+    # ── Special case: engine produced no PT at all ──
+    if target_price is None:
         dropped = [g for g in gates if "R2_FLOOR_DROP" in g]
         why = []
         if dropped:
             for g in dropped:
-                # Format: R2_FLOOR_DROP:ev_ebitda(r2=0.000)
                 model_name = g.split(":")[1].split("(")[0] if ":" in g else g
                 why.append(f"{model_name} model dropped — no reliable trend in this metric")
         if not why:
-            why = ["Engine could not produce a valuation — likely too few qualifying quarters or non-positive forward projections"]
-        why.append("This is NOT a sell signal — the engine is simply unable to model this name (pre-revenue, cyclical, restructuring, or similar)")
+            why = ["Engine could not produce a valuation — too few qualifying quarters or non-positive projections"]
+        why.append("This is NOT a sell signal — the engine cannot model this name even with the fallback (insufficient revenue / EBITDA history)")
         return {
             "rating":     "INSUFFICIENT DATA",
             "score":      0,
@@ -423,6 +416,35 @@ def compute_valuation_rubric(pt_payload: dict) -> dict:
             "upside_pct": upside_pct,
             "pt_source":  pt_source,
             "quality":    quality,
+        }
+
+    # ── Special case: PT came from trailing-median fallback (low conviction) ──
+    # All 4 trend-based models failed, but we anchored to trailing 8q × sector
+    # multiples. The PT is real but uncertain — surface that prominently.
+    is_fallback = (pt_source == "FB") or any("TRAILING_MEDIAN_FALLBACK" in g for g in gates)
+    if is_fallback:
+        # Still compute upside-based rating, but cap confidence and tag clearly
+        if upside_pct is None:
+            base_rating = "HOLD"
+        elif upside_pct >= 25:  base_rating = "BUY"
+        elif upside_pct >= 10:  base_rating = "BUY"
+        elif upside_pct >= -10: base_rating = "HOLD"
+        elif upside_pct >= -25: base_rating = "REDUCE"
+        else:                   base_rating = "SELL"
+        drivers = [
+            f"Fallback valuation: trailing 8q median × sector multiples (engine could not project a trend)",
+            f"Effective upside: {upside_pct:+.1f}%" if upside_pct is not None else "Upside not computable",
+            "0.5× conviction haircut applied — treat this PT as directional only, not a precise target",
+        ]
+        return {
+            "rating":     base_rating + " (low conviction)",
+            "score":      0,
+            "confidence": 0.30,        # explicitly capped
+            "drivers":    drivers,
+            "upside_pct": upside_pct,
+            "pt_source":  pt_source,
+            "quality":    quality,
+            "is_fallback": True,
         }
 
     score = 0

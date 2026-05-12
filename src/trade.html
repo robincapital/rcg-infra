@@ -1050,10 +1050,14 @@
   function ratingClass(rating) {
     if (!rating) return 'hold';
     if (/INSUFFICIENT/i.test(rating)) return 'insufficient';
+    // "low conviction" suffix doesn't change the bucket — just adds a badge later
     if (/BUY/i.test(rating))    return 'buy';
     if (/SELL/i.test(rating))   return 'sell';
     if (/REDUCE/i.test(rating)) return 'sell';
     return 'hold';
+  }
+  function isFallbackRating(rep) {
+    return rep?.rubric?.is_fallback === true || rep?.pt_payload?.pt_engine_default?.pt_source === 'FB';
   }
   function fmtPtCell(v) { return v == null ? '—' : '$' + (+v).toFixed(2); }
   // ─── Report HTML builder — RCG navy/gold theme matching rcg_report.py PDF ───
@@ -1221,6 +1225,16 @@
           <div class="name">Mkt cap ${fmtMoneyShort(ci.marketcap)} &nbsp;·&nbsp; ${ci.n_quarters || '?'}q SF1 history</div>
         </div>
       </div>
+      ${isFallbackRating(rep) ? `
+        <div style="background:#3d3310;border:1px solid var(--rcg-gold);color:var(--rcg-gold);
+                    padding:6px 12px;border-radius:4px;margin-bottom:7px;font-size:10px;">
+          ⚠ <b>LOW-CONVICTION TARGET</b> — engine could not detect a reliable trend in this ticker's
+          fundamentals (R² ~ 0 on all primary models). Target below is anchored to trailing 8-quarter
+          MEDIAN × sector multiples, with a 0.5× conviction haircut applied. Use as directional
+          context only, not as a precise target. Common for cyclicals, post-merger, recently-public,
+          or noisy-reporters.
+        </div>
+      ` : ''}
       <div class="rep-rec ${ratingCls}">
         <span class="label ${ratingCls}">${rub.rating || 'HOLD'}</span>
         <div class="px-line">
