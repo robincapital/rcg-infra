@@ -14,6 +14,10 @@
 | Tournament leaderboard tooltips + "How to read" guide (v16) | 🟢 | Shipped May 11 |
 | Regime tagging (v17) — every fire writes `runs.config_json.regime` | 🟢 | Shipped May 12 |
 | Hyperparameter sweep families (v18) — 31 entrants, 11 families | 🟢 | Shipped May 12 |
+| ROADMAP.md (work calendar) | 🟢 | Shipped May 12 |
+| INSUFFICIENT DATA rating (v19) | 🟢 | Shipped May 12 — clean grey banner instead of misleading SELL |
+| Trailing-median fallback PT (v20) | 🟢 | Shipped May 12 — VISN-style names get a PT instead of $0 |
+| Visible conviction score 0-100 + low-conviction filter (v21) | 🟢 | Shipped May 12 — color badge on Top 40, scale on report, 6-bucket filter chips |
 | Wait for new entrants + regime tags to accumulate 200+ samples each | 🔵 | ~48h. By May 14 per-family champions + regime IC will rotate meaningfully |
 
 ---
