@@ -379,17 +379,51 @@ def compute_valuation_rubric(pt_payload: dict) -> dict:
     """
     Deterministic scoring from the PT engine output. Maps upside, quality,
     gates, and PT source flag to one of:
-      STRONG BUY · BUY · HOLD · REDUCE · SELL
+      STRONG BUY · BUY · HOLD · REDUCE · SELL · INSUFFICIENT DATA
     plus a confidence score (0.0–1.0) and a list of bullet-point drivers.
+
+    Special case: when the engine produced no PT at all (all 4 models dropped
+    by R² floor or negative projections, no analyst fallback), the rubric
+    returns INSUFFICIENT DATA. This is distinct from SELL — the engine isn't
+    saying "overvalued", it's saying "can't model this name reliably."
 
     pt_payload is the dict returned by compute_pt_payload() — uses
     pt_with_overrides if present, otherwise pt_engine_default.
     """
     pt_block = pt_payload.get("pt_with_overrides") or pt_payload.get("pt_engine_default") or {}
+    target_price = pt_block.get("target_price")
     upside_pct  = pt_block.get("upside_pct")
     pt_source   = pt_block.get("pt_source") or "N/A"
     gates       = pt_block.get("gates_fired") or []
     quality     = pt_block.get("quality_score") or (pt_block.get("breakdown") or {}).get("quality_score")
+
+    # ── Special case: engine produced no PT (all models dropped) ──
+    # This is NOT a SELL — it's "we can't model this reliably." Common for:
+    #   · Pre-revenue companies (biotech, SPACs)
+    #   · Companies with no consistent fundamental trend (cyclicals at turning points,
+    #     restructurings, freshly-public, M&A targets)
+    #   · Names with too few reported quarters even though SF1 has rows
+    if target_price is None or "ALL_MODELS_DROPPED" in " ".join(gates):
+        # Friendly explanation of what went wrong
+        dropped = [g for g in gates if "R2_FLOOR_DROP" in g]
+        why = []
+        if dropped:
+            for g in dropped:
+                # Format: R2_FLOOR_DROP:ev_ebitda(r2=0.000)
+                model_name = g.split(":")[1].split("(")[0] if ":" in g else g
+                why.append(f"{model_name} model dropped — no reliable trend in this metric")
+        if not why:
+            why = ["Engine could not produce a valuation — likely too few qualifying quarters or non-positive forward projections"]
+        why.append("This is NOT a sell signal — the engine is simply unable to model this name (pre-revenue, cyclical, restructuring, or similar)")
+        return {
+            "rating":     "INSUFFICIENT DATA",
+            "score":      0,
+            "confidence": 0.0,
+            "drivers":    why,
+            "upside_pct": upside_pct,
+            "pt_source":  pt_source,
+            "quality":    quality,
+        }
 
     score = 0
     drivers = []

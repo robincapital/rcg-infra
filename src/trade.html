@@ -205,11 +205,13 @@
   .rep-rec.buy   { background: #0f3d1e; border-color: var(--rcg-green); }
   .rep-rec.hold  { background: #3d3310; border-color: var(--rcg-gold); }
   .rep-rec.sell  { background: #3d0f0f; border-color: var(--rcg-red); }
+  .rep-rec.insufficient { background: #2a2e3a; border-color: var(--rcg-text-dim); }
   .rep-rec .label { font-size: 18px; font-weight: bold; letter-spacing: 1px; padding: 2px 10px;
                     border-radius: 3px; color: #fff; }
   .rep-rec .label.buy  { background: var(--rcg-green); color: #052010; }
   .rep-rec .label.hold { background: var(--rcg-gold); color: #1a1500; }
   .rep-rec .label.sell { background: var(--rcg-red); color: #fff; }
+  .rep-rec .label.insufficient { background: var(--rcg-text-dim); color: #1a1a1a; font-size: 14px; }
   .rep-rec .px-line { font-family: monospace; font-size: 12px; color: var(--rcg-text); }
   .rep-rec .px-line b { color: var(--rcg-gold); font-size: 14px; }
   .rep-rec .conf { font-size: 9px; color: var(--rcg-text-dim); margin-left: auto; }
@@ -264,6 +266,8 @@
     .rep-rec.buy   { background: #0f3d1e !important; }
     .rep-rec.hold  { background: #3d3310 !important; }
     .rep-rec.sell  { background: #3d0f0f !important; }
+    .rep-rec.insufficient { background: #2a2e3a !important; }
+    .rep-rec .label.insufficient { background: #94a3b8 !important; color: #1a1a1a !important; }
     .rep-rec .label.buy  { background: #22c55e !important; color: #052010 !important; }
     .rep-rec .label.hold { background: #c8a84e !important; color: #1a1500 !important; }
     .rep-rec .label.sell { background: #ef4444 !important; color: #fff !important; }
@@ -1045,8 +1049,9 @@
   const REPORT_BASE = 'http://rcg-nixos:8085/report';
   function ratingClass(rating) {
     if (!rating) return 'hold';
-    if (/BUY/i.test(rating))  return 'buy';
-    if (/SELL/i.test(rating)) return 'sell';
+    if (/INSUFFICIENT/i.test(rating)) return 'insufficient';
+    if (/BUY/i.test(rating))    return 'buy';
+    if (/SELL/i.test(rating))   return 'sell';
     if (/REDUCE/i.test(rating)) return 'sell';
     return 'hold';
   }
@@ -1219,12 +1224,17 @@
       <div class="rep-rec ${ratingCls}">
         <span class="label ${ratingCls}">${rub.rating || 'HOLD'}</span>
         <div class="px-line">
-          Live: <b>${fmtPtCell(livePx)}</b>${pp.price_source === 'screener_eod' ? ' <span style="color:var(--rcg-gold);font-size:9px">EOD</span>' : ''}${pp.price_source === 'placeholder' ? ' <span style="color:var(--rcg-red);font-size:9px">PLACEHOLDER</span>' : ''}
-          &nbsp;→&nbsp; Target: <b>${fmtPtCell(pt)}</b>
-          &nbsp;<span style="color:${(upside||0) >= 0 ? 'var(--rcg-green)' : 'var(--rcg-red)'}">${upside == null ? '' : (upside >= 0 ? '+' : '') + upside.toFixed(1) + '%'}</span>
-          &nbsp;<span style="color:var(--rcg-text-dim);font-size:10px">PT source ${rub.pt_source || 'N/A'} · Quality ${(rub.quality != null) ? (+rub.quality).toFixed(2) : '—'}${hasUserPT ? ' · USER ASSUMPTIONS' : ''}</span>
+          ${pt != null ? `
+            Live: <b>${fmtPtCell(livePx)}</b>${pp.price_source === 'screener_eod' ? ' <span style="color:var(--rcg-gold);font-size:9px">EOD</span>' : ''}${pp.price_source === 'placeholder' ? ' <span style="color:var(--rcg-red);font-size:9px">PLACEHOLDER</span>' : ''}
+            &nbsp;→&nbsp; Target: <b>${fmtPtCell(pt)}</b>
+            &nbsp;<span style="color:${(upside||0) >= 0 ? 'var(--rcg-green)' : 'var(--rcg-red)'}">${upside == null ? '' : (upside >= 0 ? '+' : '') + upside.toFixed(1) + '%'}</span>
+            &nbsp;<span style="color:var(--rcg-text-dim);font-size:10px">PT source ${rub.pt_source || 'N/A'} · Quality ${(rub.quality != null) ? (+rub.quality).toFixed(2) : '—'}${hasUserPT ? ' · USER ASSUMPTIONS' : ''}</span>
+          ` : `
+            Live: <b>${fmtPtCell(livePx)}</b>
+            &nbsp;<span style="color:var(--rcg-text-dim);font-size:11px;font-style:italic">No reliable price target — engine could not model this name. See drivers below.</span>
+          `}
         </div>
-        <span class="conf">Conf ${((rub.confidence||0) * 100).toFixed(0)}%</span>
+        <span class="conf">${pt != null ? `Conf ${((rub.confidence||0) * 100).toFixed(0)}%` : ''}</span>
       </div>
       <div class="rep-summary">${summary || '<em>(narrative pending)</em>'}</div>
       <div class="rep-grid-2">
