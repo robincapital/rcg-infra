@@ -540,6 +540,7 @@
     <span class="macro-chip"><span class="lbl">VIX</span><span id="m-vix">—</span> <span id="m-vix-pct"></span></span>
     <span class="macro-chip"><span class="lbl">TLT</span><span id="m-tlt">—</span> <span id="m-tlt-pct"></span></span>
     <span class="macro-chip" id="m-bias-chip" title="Hover for components"><span class="lbl">BIAS</span><span id="m-bias">—</span> <span id="m-bias-detail" class="age" style="margin-left:0.4rem"></span></span>
+    <span class="macro-chip" id="m-regime-chip" title="Current market regime: VIX bucket + SPY 5d direction. Tournament leaderboard can be filtered by regime to see which models have edge here."><span class="lbl">REGIME</span><span id="m-regime">—</span> <span id="m-regime-detail" class="age" style="margin-left:0.4rem"></span></span>
     <span class="age" id="age">loading…</span>
     <span style="margin-left:auto"></span>
     <a class="nav-link" href="dynamic_factor_screener.html">Full screener →</a>
@@ -704,6 +705,16 @@
 
   <div class="panel panel-leaderboard">
     <h2>Model Tournament — Per-Model IC Leaderboard</h2>
+    <div class="corr-controls" style="padding: 0.3rem 1rem 0.5rem;">
+      <span class="lbl">Regime:</span>
+      <button data-regime="all" class="active" title="All data — regime-agnostic">All</button>
+      <button data-regime="__current__" title="Filter to the current market regime — which models have edge right now">Current</button>
+      <span class="separator" style="color:var(--border)">·</span>
+      <select id="regime-select" style="background:var(--panel); color:var(--text); border:1px solid var(--border); padding:3px 6px; font-size:11px; border-radius:3px; font-family:inherit;">
+        <option value="all">All regimes</option>
+      </select>
+      <span class="meta" id="leaderboard-regime-meta" style="color:var(--dim);font-size:10px;margin-left:0.5rem">—</span>
+    </div>
     <div class="leaderboard-wrap" id="leaderboard-wrap">
       <div class="empty loading">loading model tournament results…</div>
     </div>
@@ -1854,6 +1865,16 @@
     return 'dim';
   }
 
+  // Regime filter — which regime's IC stats to render. 'all' means use the
+  // overall (unstratified) numbers; any specific label uses by_regime[label].
+  let regimeFilter = 'all';
+
+  function statsForRegime(row, regime) {
+    if (regime === 'all') return row;
+    const r = (row.by_regime || {})[regime];
+    return r ? { ...row, ...r } : null;   // null → no data for this (model, regime)
+  }
+
   function renderLeaderboard() {
     const wrap = document.getElementById('leaderboard-wrap');
     if (!leaderboardData || !leaderboardData.results) {
@@ -1862,11 +1883,49 @@
     }
     const results = leaderboardData.results;
     const horizons = leaderboardData.horizons || ['30min', '60min', '4h'];
+    const regimeLabels = leaderboardData.regime_labels || [];
+    const currentRegime = leaderboardData.current_regime?.regime_label || null;
 
-    // Group by horizon, sort each group by IC desc
+    // Update header chip while we're here (one source of truth: leaderboard.json)
+    const rEl = document.getElementById('m-regime');
+    const rDet = document.getElementById('m-regime-detail');
+    if (rEl && currentRegime) {
+      rEl.textContent = currentRegime;
+      const cr = leaderboardData.current_regime;
+      const vix = cr?.vix; const spy5 = cr?.spy_5d_pct;
+      if (rDet) rDet.textContent = (vix != null ? 'vix ' + vix.toFixed(1) : '') +
+                                    (spy5 != null ? ' · SPY ' + (spy5 >= 0 ? '+' : '') + spy5.toFixed(1) + '%' : '');
+    }
+    // Populate regime-select dropdown once
+    const sel = document.getElementById('regime-select');
+    if (sel && sel.options.length <= 1 && regimeLabels.length) {
+      regimeLabels.forEach(lbl => {
+        const opt = document.createElement('option');
+        opt.value = lbl; opt.textContent = lbl + (lbl === currentRegime ? ' (current)' : '');
+        sel.appendChild(opt);
+      });
+    }
+    // Resolve __current__ token to actual regime label
+    const activeRegime = (regimeFilter === '__current__') ? (currentRegime || 'all') : regimeFilter;
+
+    // Update the meta line so user knows what's being shown
+    const regMeta = document.getElementById('leaderboard-regime-meta');
+    if (regMeta) {
+      if (activeRegime === 'all') {
+        regMeta.textContent = 'all data (regime-agnostic)';
+      } else {
+        regMeta.textContent = `filtered to "${activeRegime}" only — ` +
+          `subset of pairs captured while VIX/SPY were in this regime`;
+      }
+    }
+
+    // Group by horizon, sort each group by IC desc (within the active regime filter)
     const byHorizon = {};
     horizons.forEach(h => byHorizon[h] = []);
-    results.forEach(r => { if (byHorizon[r.horizon]) byHorizon[r.horizon].push(r); });
+    results.forEach(r => {
+      const filtered = statsForRegime(r, activeRegime);
+      if (filtered && byHorizon[r.horizon]) byHorizon[r.horizon].push(filtered);
+    });
     Object.values(byHorizon).forEach(arr => {
       arr.sort((a, b) => (b.ic_directional ?? -2) - (a.ic_directional ?? -2));
     });
@@ -3060,6 +3119,25 @@ Signal: ${m.insSignal ?? 'neutral'}`;
   // ── Leaderboard: load once, refresh hourly (computed daily on server) ──
   fetchLeaderboard().then(() => renderLeaderboard());
   setInterval(() => fetchLeaderboard().then(() => renderLeaderboard()), 60 * 60 * 1000);
+
+  // Regime filter wiring: All / Current buttons + dropdown
+  document.querySelectorAll('button[data-regime]').forEach(b => {
+    b.addEventListener('click', () => {
+      regimeFilter = b.dataset.regime;
+      document.querySelectorAll('button[data-regime]').forEach(bb =>
+        bb.classList.toggle('active', bb.dataset.regime === regimeFilter));
+      // Reset the dropdown to 'All regimes' when using the buttons
+      const sel = document.getElementById('regime-select');
+      if (sel) sel.value = 'all';
+      renderLeaderboard();
+    });
+  });
+  document.getElementById('regime-select').addEventListener('change', (e) => {
+    regimeFilter = e.target.value;
+    document.querySelectorAll('button[data-regime]').forEach(bb =>
+      bb.classList.toggle('active', false));
+    renderLeaderboard();
+  });
 
   // Load the user-pinned set + per-ticker assumptions first so star icons
   // and orange-dot indicators paint correctly on the very first render.

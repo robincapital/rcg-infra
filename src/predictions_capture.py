@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, "/home/nixos/Prod/V1/src")
 import signals_db as sdb  # noqa: E402
+import regime_tag  # noqa: E402
 
 PRICES_PATH       = Path("/home/nixos/Prod/V1/src/bloomberg_prices.json")
 SCREENER_CSV_PATH = Path("/home/nixos/Prod/V1/outputs/long_screener_results.csv")
@@ -279,6 +280,9 @@ def main():
     comp_map = load_fundamental_composite_map()
     bbg_generated_at = bbg.get("generated_at")
 
+    regime = regime_tag.compute_regime()
+    print(f"[predictions] regime: {regime['regime_label']}  (vix={regime['vix']}, spy_5d={regime['spy_5d_pct']}%)")
+
     run_id = sdb.record_run(
         run_type="live_prediction",
         config={
@@ -286,6 +290,7 @@ def main():
             "bbg_generated_at":  bbg_generated_at,
             "n_watchlist":       len(watchlist),
             "screener_csv_seen": SCREENER_CSV_PATH.exists(),
+            "regime":            regime,
         },
     )
     if not run_id:

@@ -21,9 +21,55 @@ from pathlib import Path
 
 sys.path.insert(0, "/home/nixos/Prod/V1/src")
 import psycopg
+import regime_tag
 
 OUTPUT_PATH = Path("/home/nixos/Prod/V1/outputs/leaderboard.json")
 HORIZONS = ["30min", "60min", "4h"]
+
+
+def _metrics(scores, rets):
+    """Compute hit_rate, IC directional, IC Spearman, avg-score-abs, avg-realized
+    from parallel arrays of (score, realized_return). Returns dict with the
+    keys the dashboard expects, or empty dict if no data."""
+    n = len(scores)
+    if n == 0:
+        return {"n": 0, "n_strong": 0, "hit_rate": None,
+                "ic_directional": None, "ic_spearman": None,
+                "avg_score_abs": None, "avg_realized": None}
+    strong = [(s, r) for s, r in zip(scores, rets) if abs(s) >= 5]
+    hits = sum(1 for s, r in strong if (s > 0 and r > 0) or (s < 0 and r < 0))
+    hit_rate = hits / len(strong) if strong else None
+    ic_dir_pairs = [(1 if s > 0 else -1 if s < 0 else 0)
+                    * (1 if r > 0 else -1 if r < 0 else 0)
+                    for s, r in zip(scores, rets)]
+    ic_dir = sum(ic_dir_pairs) / n
+    ic_sp = spearman(scores, rets) if n >= 5 else None
+    return {
+        "n":              n,
+        "n_strong":       len(strong),
+        "hit_rate":       round(hit_rate, 4) if hit_rate is not None else None,
+        "ic_directional": round(ic_dir, 4) if ic_dir is not None else None,
+        "ic_spearman":    round(ic_sp, 4) if ic_sp is not None else None,
+        "avg_score_abs":  round(sum(abs(s) for s in scores) / n, 2),
+        "avg_realized":   round(sum(rets) / n, 4),
+    }
+
+
+def _stratify_by_regime(triples):
+    """
+    triples: list of (score, return, regime_label_or_None)
+    Returns: dict mapping regime_label -> metrics dict. Includes 'all' as the
+    overall (unstratified) bucket.
+    """
+    by_regime = defaultdict(list)
+    for s, r, lbl in triples:
+        by_regime["all"].append((s, r))
+        if lbl:
+            by_regime[lbl].append((s, r))
+    return {
+        lbl: _metrics([s for s, _ in pairs], [r for _, r in pairs])
+        for lbl, pairs in by_regime.items()
+    }
 
 
 def spearman(xs, ys):
@@ -73,9 +119,11 @@ def main():
             print("[leaderboard] no model_* signals found yet")
             return
 
-        # ─── Pull all (model_score, realized_return) pairs per horizon ───
-        # We aggregate across ALL captured runs in the DB (no time window;
-        # tournament covers the full history).
+        # ─── Pull all (model_score, realized_return, regime) triples per horizon ───
+        # We aggregate across ALL captured runs in the DB (no time window).
+        # Regime is read from the score-run's config_json (set by models_capture
+        # at fire-time). Runs from before regime tagging was added have NULL
+        # regime and contribute only to the "all" overall bucket.
         results = []
         for score_name in score_names:
             model_label = score_name.replace("model_", "").replace("_score", "")
@@ -84,10 +132,12 @@ def main():
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        SELECT score.signal_value, ret.signal_value
+                        SELECT score.signal_value, ret.signal_value,
+                               r.config_json -> 'regime' ->> 'regime_label' AS regime_label
                         FROM signals score
                         JOIN signals ret
                           ON score.run_id = ret.run_id AND score.ticker = ret.ticker
+                        JOIN runs r ON r.run_id = score.run_id
                         WHERE score.signal_name = %s
                           AND ret.signal_name   = %s
                           AND score.signal_value IS NOT NULL
@@ -95,50 +145,17 @@ def main():
                         """,
                         (score_name, ret_name),
                     )
-                    pairs = cur.fetchall()
+                    triples = [(float(s), float(r), lbl) for s, r, lbl in cur.fetchall()]
 
-                n = len(pairs)
-                if n == 0:
-                    results.append({
-                        "model":          model_label,
-                        "horizon":        horizon,
-                        "n":              0,
-                        "hit_rate":       None,
-                        "ic_directional": None,
-                        "ic_spearman":    None,
-                        "avg_score_abs":  None,
-                        "avg_realized":   None,
-                    })
-                    continue
-
-                scores = [float(p[0]) for p in pairs]
-                rets   = [float(p[1]) for p in pairs]
-
-                # Sign-match hit rate (only counts predictions with non-trivial magnitude)
-                strong = [(s, r) for s, r in zip(scores, rets) if abs(s) >= 5]
-                hits = sum(1 for s, r in strong
-                           if (s > 0 and r > 0) or (s < 0 and r < 0))
-                hit_rate = hits / len(strong) if strong else None
-
-                # Directional IC = sign(score) × sign(ret) averaged
-                ic_dir_pairs = [(1 if s > 0 else -1 if s < 0 else 0)
-                                * (1 if r > 0 else -1 if r < 0 else 0)
-                                for s, r in zip(scores, rets)]
-                ic_dir = sum(ic_dir_pairs) / n if n else None
-
-                ic_sp = spearman(scores, rets) if n >= 5 else None
-
-                results.append({
+                by_regime = _stratify_by_regime(triples)
+                overall = by_regime.get("all", _metrics([], []))
+                row = {
                     "model":          model_label,
                     "horizon":        horizon,
-                    "n":              n,
-                    "n_strong":       len(strong),
-                    "hit_rate":       round(hit_rate, 4) if hit_rate is not None else None,
-                    "ic_directional": round(ic_dir, 4) if ic_dir is not None else None,
-                    "ic_spearman":    round(ic_sp, 4) if ic_sp is not None else None,
-                    "avg_score_abs":  round(sum(abs(s) for s in scores) / n, 2),
-                    "avg_realized":   round(sum(rets) / n, 4),
-                })
+                    **overall,                   # n, hit_rate, ic_directional, ic_spearman, ...
+                    "by_regime":      {k: v for k, v in by_regime.items() if k != "all"},
+                }
+                results.append(row)
 
     # Same computation for the BBG-derived live-prediction composite
     # so it shows in the leaderboard alongside the named models.
@@ -148,10 +165,12 @@ def main():
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT score.signal_value, ret.signal_value
+                    SELECT score.signal_value, ret.signal_value,
+                           r.config_json -> 'regime' ->> 'regime_label' AS regime_label
                     FROM signals score
                     JOIN signals ret
                       ON score.run_id = ret.run_id AND score.ticker = ret.ticker
+                    JOIN runs r ON r.run_id = score.run_id
                     WHERE score.signal_name = 'pred_signed_score'
                       AND ret.signal_name   = %s
                       AND score.signal_value IS NOT NULL
@@ -159,38 +178,23 @@ def main():
                     """,
                     (ret_name,),
                 )
-                pairs = cur.fetchall()
-            n = len(pairs)
-            if n == 0:
-                results.append({"model": "bbg_predictive_composite", "horizon": horizon,
-                                "n": 0, "hit_rate": None, "ic_directional": None,
-                                "ic_spearman": None, "avg_score_abs": None, "avg_realized": None})
-                continue
-            scores = [float(p[0]) for p in pairs]; rets = [float(p[1]) for p in pairs]
-            strong = [(s, r) for s, r in zip(scores, rets) if abs(s) >= 5]
-            hits = sum(1 for s, r in strong if (s > 0 and r > 0) or (s < 0 and r < 0))
-            hit_rate = hits / len(strong) if strong else None
-            ic_dir_pairs = [(1 if s > 0 else -1 if s < 0 else 0)
-                            * (1 if r > 0 else -1 if r < 0 else 0)
-                            for s, r in zip(scores, rets)]
-            ic_dir = sum(ic_dir_pairs) / n
-            ic_sp = spearman(scores, rets) if n >= 5 else None
+                triples = [(float(s), float(r), lbl) for s, r, lbl in cur.fetchall()]
+            by_regime = _stratify_by_regime(triples)
+            overall = by_regime.get("all", _metrics([], []))
             results.append({
                 "model":          "bbg_predictive_composite",
                 "horizon":        horizon,
-                "n":              n,
-                "n_strong":       len(strong),
-                "hit_rate":       round(hit_rate, 4) if hit_rate is not None else None,
-                "ic_directional": round(ic_dir, 4),
-                "ic_spearman":    round(ic_sp, 4) if ic_sp is not None else None,
-                "avg_score_abs":  round(sum(abs(s) for s in scores) / n, 2),
-                "avg_realized":   round(sum(rets) / n, 4),
+                **overall,
+                "by_regime":      {k: v for k, v in by_regime.items() if k != "all"},
             })
 
+    current_regime = regime_tag.compute_regime()
     payload = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "horizons":     HORIZONS,
-        "results":      results,
+        "generated_at":    datetime.now(timezone.utc).isoformat(),
+        "horizons":        HORIZONS,
+        "current_regime":  current_regime,
+        "regime_labels":   regime_tag.ALL_REGIME_LABELS,
+        "results":         results,
     }
     OUTPUT_PATH.write_text(json.dumps(payload, default=str, indent=2))
     print(f"[leaderboard] wrote {OUTPUT_PATH} ({OUTPUT_PATH.stat().st_size} bytes) "

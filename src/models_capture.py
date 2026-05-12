@@ -36,6 +36,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, "/home/nixos/Prod/V1/src")
 import signals_db as sdb  # noqa: E402
+import regime_tag  # noqa: E402
 
 PRICES_PATH = Path("/home/nixos/Prod/V1/src/bloomberg_prices.json")
 
@@ -257,13 +258,21 @@ def main():
         print("[models] empty watchlist")
         return
 
+    # Tag every fire of this batch with the current market regime so the
+    # leaderboard can compute IC stratified by regime later. Same regime is
+    # written to every model's run in this batch (they all fire at the same
+    # moment, so they share the regime).
+    regime = regime_tag.compute_regime()
+    print(f"[models] regime: {regime['regime_label']}  (vix={regime['vix']}, spy_5d={regime['spy_5d_pct']}%)")
+
     runs = {}
     n_signals = 0
     for model_name, fn in MODELS:
         run_id = sdb.record_run(
             run_type="model_score",
             config={"model": model_name, "bbg_age": bbg.get("generated_at"),
-                    "n_watchlist": len(watchlist)},
+                    "n_watchlist": len(watchlist),
+                    "regime": regime},
         )
         if not run_id:
             print(f"[models] DB unavailable — skipping {model_name}")
