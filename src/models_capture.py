@@ -38,10 +38,13 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import psycopg
+
 sys.path.insert(0, "/home/nixos/Prod/V1/src")
 import signals_db as sdb  # noqa: E402
 import regime_tag  # noqa: E402
 import quant_signals as qs  # noqa: E402  # v24 — pattern + cross-sectional signals
+import meta_model_capture  # noqa: E402  # v26 — Stage 1 OLS meta-blend
 
 PRICES_PATH = Path("/home/nixos/Prod/V1/src/bloomberg_prices.json")
 
@@ -361,6 +364,9 @@ def main():
 
     runs = {}
     n_signals = 0
+    # v26: collect per-ticker scores as we go so meta_model_capture can read
+    # them without re-querying the DB at the end of the fire.
+    current_scores: dict[str, dict[str, float]] = {}
     for model_name, family, fn in MODELS:
         run_id = sdb.record_run(
             run_type="model_score",
@@ -398,11 +404,52 @@ def main():
             if live is not None:
                 sdb.record_signal(run_id, ticker, "live_price", value=float(live))
             n_signals += 1
+            # Stash for meta-blend at end of fire
+            current_scores.setdefault(ticker, {})[f"model_{model_name}_score"] = float(score)
 
         sdb.finalize_run(run_id, n_out=len([t for t, w in watchlist.items()
                                             if w and not w.get("error") and w.get("bars")]))
 
     print(f"[models] {len(runs)} models scored · {n_signals} signal rows captured")
+
+    # v26 — meta-blend (Stage 1 OLS). Augment per-ticker scores with the
+    # BBG sub-signals (already in the watchlist as derived metrics, written
+    # by predictions_capture.py on its own cadence — we pull them from the
+    # most-recent live_prediction run if available).
+    try:
+        with psycopg.connect("host=/run/postgresql user=nixos dbname=rcg_signals") as conn:
+            with conn.cursor() as cur:
+                # Pull each ticker's most-recent BBG sub-signal values
+                # (from the latest live_prediction run)
+                cur.execute("""
+                    SELECT s.ticker, s.signal_name, s.signal_value
+                    FROM signals s
+                    JOIN runs r ON s.run_id = r.run_id
+                    WHERE r.run_type = 'live_prediction'
+                      AND r.run_timestamp > NOW() - interval '1 hour'
+                      AND s.signal_name IN ('pred_signed_score','pred_surge','pred_udv',
+                                            'pred_accel','pred_vwap_slope','pred_range_exp')
+                """)
+                for ticker, sname, val in cur.fetchall():
+                    if ticker in current_scores and val is not None:
+                        current_scores[ticker][sname] = float(val)
+    except Exception as e:
+        print(f"[models] could not augment with BBG sub-signals: {e}")
+        # not fatal — meta_capture handles missing features as 0
+
+    try:
+        import psycopg as _psycopg_unused  # noqa  (just to keep linter quiet)
+        n_meta = meta_model_capture.capture_meta_scores(
+            watchlist=watchlist,
+            current_scores=current_scores,
+            regime=regime,
+            bbg_age=bbg.get("generated_at"),
+        )
+        if n_meta:
+            print(f"[meta-blend] {n_meta} signal rows captured")
+    except Exception as e:
+        print(f"[meta-blend] capture failed: {e}")
+        import traceback; traceback.print_exc()
 
 
 if __name__ == "__main__":

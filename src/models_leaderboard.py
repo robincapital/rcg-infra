@@ -52,6 +52,9 @@ def family_from_model(model_name: str) -> str:
             or n.startswith("sector_relative_momentum")
             or n.startswith("pca_residual")):
         return "cross_sectional"
+    # v26 — Stage 1 OLS meta-blend
+    if n.startswith("meta_blend"):
+        return "meta_blend"
     return "other"
 
 
