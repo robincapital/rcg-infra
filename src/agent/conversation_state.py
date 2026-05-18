@@ -195,31 +195,62 @@ class ConversationState:
 
     def _repair_orphaned_tool_uses(self) -> int:
         """
-        Scan the message history for assistant tool_use blocks that lack a
-        corresponding tool_result in the immediately-following user message.
-        Inserts stub tool_result blocks for each orphan so the Anthropic API
-        accepts the messages array. Returns the number of repairs made.
+        Normalize the message history so the Anthropic API will accept it.
+        Three classes of repair, run in order:
 
-        Called automatically on every conversation load. Idempotent — running
-        twice is a no-op.
+        1. **Strip mixed content from tool-result user messages.** When a
+           user message contains tool_result blocks AND other content (text),
+           Anthropic rejects the call. Keep only the tool_results; move the
+           text into a follow-up user message if needed.
+
+        2. **Insert stub tool_results for orphaned tool_use blocks.** When
+           an assistant tool_use has no matching tool_result in the next
+           user message, synthesize an error stub.
+
+        3. **Collapse consecutive user messages.** After failed API calls,
+           multiple user messages can accumulate with no assistant response
+           between them. Collapse text blocks into the last one; keep only
+           the latest user message at any chain end.
+
+        Returns total repair count. Idempotent.
         """
         msgs = self.data.get("messages", [])
         n_repairs = 0
+
+        # ── Pass 1: split mixed tool_result + text user messages ──────
+        new_msgs = []
+        for m in msgs:
+            if m.get("role") != "user":
+                new_msgs.append(m)
+                continue
+            content = m.get("content", [])
+            if not isinstance(content, list):
+                new_msgs.append(m)
+                continue
+            results = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"]
+            other   = [b for b in content if isinstance(b, dict) and b.get("type") != "tool_result"]
+            if results and other:
+                # Split into two user messages: tool_results first, text after
+                new_msgs.append({**m, "content": results})
+                new_msgs.append({"role": "user", "content": other,
+                                 "_meta": {"repair_split": True}})
+                n_repairs += 1
+            else:
+                new_msgs.append(m)
+        msgs = new_msgs
+
+        # ── Pass 2: insert stub tool_results for orphaned tool_use ────
         i = 0
         while i < len(msgs):
-            msg = msgs[i]
-            if msg.get("role") != "assistant":
+            m = msgs[i]
+            if m.get("role") != "assistant":
                 i += 1
                 continue
-            # Find tool_use ids in this assistant message
-            tool_use_ids = []
-            for block in msg.get("content", []):
-                if isinstance(block, dict) and block.get("type") == "tool_use":
-                    tool_use_ids.append(block.get("id"))
+            tool_use_ids = [b.get("id") for b in m.get("content", [])
+                            if isinstance(b, dict) and b.get("type") == "tool_use"]
             if not tool_use_ids:
                 i += 1
                 continue
-            # Check the next message for matching tool_results
             next_msg = msgs[i + 1] if i + 1 < len(msgs) else None
             result_ids = set()
             if next_msg and next_msg.get("role") == "user":
@@ -228,33 +259,76 @@ class ConversationState:
                         result_ids.add(block.get("tool_use_id"))
             missing = [tid for tid in tool_use_ids if tid not in result_ids]
             if missing:
-                # Build a stub user message with synthetic tool_results
                 stub_blocks = [
-                    {
-                        "type":         "tool_result",
-                        "tool_use_id":  tid,
-                        "content":      "ERROR: prior tool call was aborted (agent restart, max_tokens, or crash). Continuing without this result.",
-                        "is_error":     True,
-                    }
+                    {"type": "tool_result", "tool_use_id": tid,
+                     "content": "ERROR: prior tool call was aborted (agent restart, max_tokens, or crash). Continuing without this result.",
+                     "is_error": True}
                     for tid in missing
                 ]
-                if next_msg and next_msg.get("role") == "user":
-                    # Augment existing user message with stub results
-                    existing_content = next_msg.get("content", [])
-                    if not isinstance(existing_content, list):
-                        existing_content = [{"type": "text", "text": str(existing_content)}]
-                    next_msg["content"] = stub_blocks + existing_content
+                if next_msg and next_msg.get("role") == "user" \
+                        and all(isinstance(b, dict) and b.get("type") == "tool_result"
+                                for b in next_msg.get("content", [])):
+                    # Append stubs to the existing tool_result-only message
+                    next_msg["content"] = list(next_msg.get("content", [])) + stub_blocks
                     n_repairs += len(missing)
                 else:
-                    # Insert a brand-new user message after the orphan
-                    repair_msg = {
-                        "role":    "user",
-                        "content": stub_blocks,
-                        "_meta":   {"repair": True,
-                                    "ts":     datetime.now(timezone.utc).isoformat()},
-                    }
+                    # Insert a new user message before whatever's next
+                    repair_msg = {"role": "user", "content": stub_blocks,
+                                  "_meta": {"repair": True,
+                                            "ts": datetime.now(timezone.utc).isoformat()}}
                     msgs.insert(i + 1, repair_msg)
                     n_repairs += len(missing)
             i += 1
+
+        # ── Pass 3: collapse runs of consecutive user messages ────────
+        # The conversation must alternate (or at least never have two
+        # user messages in a row without an assistant between them).
+        # When we find a run of user msgs, we keep:
+        #   - all tool_result blocks from the run (Anthropic needs them)
+        #   - the LAST text block (most recent user intent)
+        compressed = []
+        i = 0
+        while i < len(msgs):
+            m = msgs[i]
+            if m.get("role") != "user":
+                compressed.append(m)
+                i += 1
+                continue
+            # Collect all consecutive user msgs starting at i
+            run_end = i
+            while run_end < len(msgs) and msgs[run_end].get("role") == "user":
+                run_end += 1
+            run = msgs[i:run_end]
+            if len(run) == 1:
+                compressed.append(run[0])
+            else:
+                # Collect all tool_results across the run + the LAST text block
+                all_results = []
+                last_text = None
+                for rm in run:
+                    for b in rm.get("content", []):
+                        if isinstance(b, dict):
+                            if b.get("type") == "tool_result":
+                                all_results.append(b)
+                            elif b.get("type") == "text":
+                                last_text = b
+                if all_results and last_text:
+                    # Two messages: tool_results first, text second
+                    compressed.append({"role": "user", "content": all_results,
+                                       "_meta": {"repair_collapsed": True}})
+                    compressed.append({"role": "user", "content": [last_text],
+                                       "_meta": {"repair_collapsed": True}})
+                    n_repairs += 1
+                elif all_results:
+                    compressed.append({"role": "user", "content": all_results,
+                                       "_meta": {"repair_collapsed": True}})
+                    n_repairs += 1
+                elif last_text:
+                    compressed.append({"role": "user", "content": [last_text],
+                                       "_meta": {"repair_collapsed": True}})
+                    n_repairs += 1
+            i = run_end
+        msgs = compressed
+
         self.data["messages"] = msgs
         return n_repairs
