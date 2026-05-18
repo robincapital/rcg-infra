@@ -63,3 +63,6 @@ src/user_pinned.json
 src/user_assumptions.json
 
 src/pca_universe.json
+
+# agent runtime state — venv, conversation history, cost logs, etc.
+var/
