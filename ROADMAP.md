@@ -54,7 +54,7 @@ Goal: every model improves over time **without ever being cut**. Three independe
 
 | Item | Status | Notes |
 |---|---|---|
-| Stage 1: Linear weight blending (`meta_signed_score`) — OLS on `realized_return ~ Σ wᵢ × model_iᵢ_score`, walk-forward refit weekly. New entrant in tournament. | 🔵 | Need ≥ 7 days of per-variant data. Target start: **May 19** |
+| Stage 1: Linear weight blending (`meta_signed_score`) — OLS on `realized_return ~ Σ wᵢ × model_iᵢ_score`, walk-forward refit weekly. New entrant in tournament. | 🟢 v26 | **Built May 18.** First weights publish on next re-fit after gate hits (currently 9,493 obs / 6 days for 30min — needs 1 more trading day for the 7-day threshold) |
 | Stage 2: Logistic regression conviction — `P(sign(return)=+1)` from full feature vector; calibrated probability enables Kelly sizing | 🔵 | Need ≥ 4 weeks. Target start: **June 8** |
 | Stage 3: Gradient-boost (LightGBM) with regime interactions — captures "model X works when VIX > 25" effects | 🔵 | Need ≥ 6 weeks. Target start: **June 22** |
 | Stage 4: Regime-conditional weights — separate weight vector per regime, route at inference time | 🔵 | Need ≥ 8 weeks AND Stage 3 done. Target: **July 7** |
