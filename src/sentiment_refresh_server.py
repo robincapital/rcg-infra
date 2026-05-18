@@ -219,23 +219,22 @@ def compute_pt_payload(ticker: str, overrides: dict | None) -> dict:
         live_price = 100.0
         price_source = "placeholder"
 
-    # Run engine — with AND without overrides, so the response shows both
-    r_default = compute_target_price(
+    # Run engine — with AND without overrides, so the response shows both.
+    # shares_diluted passed explicitly so share-count matches the screener
+    # (which also passes it). Without this, the engine derives it from
+    # marketcap / last_price, which drifts when BBG live ≠ marketcap-implied.
+    _kw = dict(
         ebitda_series=f["ebitda_series"], revenue_series=f["revenue_series"],
         fcf_series=f["fcf_series"], debt_series=f["debt_series"],
         marketcap=f["marketcap"], last_price=live_price,
         cash_on_hand=f["cash_on_hand"], sector=f.get("sector"),
+        shares_diluted=f.get("shares_diluted"),
     )
+    r_default = compute_target_price(**_kw)
 
     r_user = None
     if overrides and any(v is not None for v in overrides.values()):
-        r_user = compute_target_price(
-            ebitda_series=f["ebitda_series"], revenue_series=f["revenue_series"],
-            fcf_series=f["fcf_series"], debt_series=f["debt_series"],
-            marketcap=f["marketcap"], last_price=live_price,
-            cash_on_hand=f["cash_on_hand"], sector=f.get("sector"),
-            growth_overrides=overrides,
-        )
+        r_user = compute_target_price(**_kw, growth_overrides=overrides)
 
     return {
         "ticker":          ticker.upper(),

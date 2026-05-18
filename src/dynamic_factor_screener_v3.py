@@ -26,6 +26,7 @@ to dynamically weight BOTH fundamental AND technical/momentum scoring criteria.
 """
 
 import os
+import sys
 import polars as pl
 import numpy as np
 from scipy import stats
@@ -33,6 +34,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import warnings
 warnings.filterwarnings('ignore')
+
+# Canonical PT engine — same one used by rcg_report.py and the /report
+# endpoint. The legacy compute_target_price_and_upside() below is kept for
+# reference but is no longer called (was producing PTs that diverged from
+# the canonical engine; see fix in main loop below).
+sys.path.insert(0, "/home/nixos/Prod/V1/src")
+from price_targets import compute_target_price as _canon_pt
 
 # ============================================================
 # ── USER INPUTS  (edit these before each run) ───────────────
@@ -1199,6 +1207,8 @@ def compute_industry_medians(sf1, sector_map):
     all_tickers = sf1["ticker"].unique().to_list()
     for ticker in all_tickers:
         sector = (sector_map or {}).get(ticker, {}).get("sector", "_default") or "_default"
+        # NOTE: sf1 was already filtered to dimension="ARQ" at load time
+        # (load_sf1, line 327). No additional dimension filter needed here.
         tk = sf1.filter(pl.col("ticker") == ticker).sort("datekey")
         if tk.height < 2:
             continue
@@ -1264,6 +1274,7 @@ def screen_stocks(sf1, equity_prices, adr_tickers=None, biotech_tickers=None,
     no_price_count = 0
 
     for ticker in eligible_tickers:
+        # sf1 is already ARQ-filtered at load time (load_sf1, line 327).
         tk = sf1.filter(pl.col("ticker") == ticker).sort("datekey")
         if tk.height < MIN_QUARTERS:
             continue
@@ -1367,12 +1378,25 @@ def screen_stocks(sf1, equity_prices, adr_tickers=None, biotech_tickers=None,
         ticker_sector = (sector_map or {}).get(ticker, {}).get("sector", "_default")
 
         if techs.get("_last_price") and techs["_last_price"] > 0:
-            internal_tp, _, _, internal_pt_detail = compute_target_price_and_upside(
-                ebitda, debt, fcf, mktcap, techs["_last_price"],
-                cash_on_hand=cash_on_hand,
-                shares_diluted=shares_diluted,
+            # Use the canonical PT engine (price_targets.compute_target_price)
+            # so screener output matches rcg_report.py + the /report endpoint.
+            # Legacy compute_target_price_and_upside() below is dead code now.
+            shares_arg = None
+            if shares_diluted and shares_diluted[-1] and shares_diluted[-1] > 0:
+                shares_arg = float(shares_diluted[-1])
+            _r = _canon_pt(
+                ebitda_series=ebitda,
                 revenue_series=revenue,
-                sector=ticker_sector)
+                fcf_series=fcf,
+                debt_series=debt,
+                marketcap=mktcap,
+                last_price=techs["_last_price"],
+                cash_on_hand=cash_on_hand,
+                shares_diluted=shares_arg,
+                sector=ticker_sector,
+            )
+            internal_tp = _r.target_price
+            internal_pt_detail = _r.to_pt_detail()
         else:
             internal_tp = None
             internal_pt_detail = {}

@@ -15,6 +15,7 @@ agree on what "this ticker's fundamentals" means and don't drift apart.
 from __future__ import annotations
 
 import math
+from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -22,7 +23,12 @@ from typing import Optional
 import numpy as np
 import polars as pl
 
-SHARADAR_SF1 = Path("/var/sharadar/data/SF1.parquet")
+SHARADAR_SF1     = Path("/var/sharadar/data/SF1.parquet")
+SHARADAR_TICKERS = Path("/var/sharadar/data/TICKERS.parquet")
+
+# Match the screener's history window so PT regressions use the same input
+# series. dynamic_factor_screener_v3.py: load_sf1 filters `datekey >= now-3y`.
+HISTORY_YEARS = 3
 
 
 # Sharadar parquet is ~200MB; cache the load so per-ticker lookups are fast.
@@ -31,6 +37,32 @@ def _load_sf1() -> pl.DataFrame:
     if not SHARADAR_SF1.exists():
         raise FileNotFoundError(f"SF1 parquet missing: {SHARADAR_SF1}")
     return pl.read_parquet(SHARADAR_SF1)
+
+
+@lru_cache(maxsize=1)
+def _load_tickers_meta() -> dict:
+    """Build a ticker → {sector, industry, name} dict from TICKERS.parquet.
+    Sector matters because compute_target_price uses sector-specific multiples
+    (Healthcare EV/EBITDA=14 vs _default=12, etc.). Without this lookup, the
+    report endpoint would always pass sector=None → '_default' multiples,
+    while the screener uses the correct sector — guaranteeing PT divergence
+    on every name."""
+    if not SHARADAR_TICKERS.exists():
+        return {}
+    df = pl.read_parquet(SHARADAR_TICKERS)
+    out = {}
+    has_sector   = "sector"   in df.columns
+    has_industry = "industry" in df.columns
+    has_name     = "name"     in df.columns
+    for row in df.iter_rows(named=True):
+        t = row.get("ticker")
+        if not t: continue
+        out[t.upper()] = {
+            "sector":   row.get("sector")   if has_sector   else None,
+            "industry": row.get("industry") if has_industry else None,
+            "name":     row.get("name")     if has_name     else None,
+        }
+    return out
 
 
 def _clean_floats(values) -> list:
@@ -55,15 +87,19 @@ def fetch_fundamentals(ticker: str) -> Optional[dict]:
     Series are sorted oldest → newest by datekey. Lists, not pl.Series, so
     they're JSON-serializable for the API response.
 
-    Filters to dimension='MRQ' (Most-Recent Quarterly, restated) so each row
-    is a clean point-in-time quarter — not mixed with trailing-12 or annual
-    aggregates. This is what we want for trend regression on the trailing
-    fundamentals.
+    Filters to dimension='ARQ' (As-Reported Quarterly) to MATCH the daily
+    screener (load_sf1 → dimension="ARQ"). Both paths use the same SF1
+    slice, guaranteeing the report endpoint's PT matches the screener CSV's
+    PT for any given ticker (subject to live-price differences in upside %).
     """
     sf1 = _load_sf1()
     flt = pl.col("ticker") == ticker.upper()
     if "dimension" in sf1.columns:
-        flt = flt & (pl.col("dimension") == "MRQ")
+        flt = flt & (pl.col("dimension") == "ARQ")
+    # Match screener's 3-year history window so Theil-Sen sees the same series
+    cutoff = datetime.now() - timedelta(days=365 * HISTORY_YEARS)
+    if "datekey" in sf1.columns:
+        flt = flt & (pl.col("datekey") >= cutoff.date())
     tk = sf1.filter(flt).sort("datekey")
     if tk.height < 3:
         return None
@@ -88,6 +124,21 @@ def fetch_fundamentals(ticker: str) -> Optional[dict]:
     elif "eps" in tk.columns:
         eps = _clean_floats(tk["eps"].to_list())
 
+    # Share count (latest non-null) — match the screener which passes
+    # shares_diluted explicitly. Without it, the engine derives share_count
+    # from marketcap/last_price, which diverges slightly when BBG live price
+    # differs from the marketcap-implied price.
+    shares_diluted = None
+    for col in ("shareswadil", "shareswa", "sharesbas"):
+        if col in tk.columns:
+            vals = [v for v in tk[col].to_list() if v is not None]
+            if vals and vals[-1] and vals[-1] > 0:
+                try:
+                    shares_diluted = float(vals[-1])
+                    break
+                except (TypeError, ValueError):
+                    pass
+
     cash_on_hand = 0.0
     for col in ("cashnequsd", "cashneq", "cash"):
         if col in tk.columns:
@@ -110,8 +161,9 @@ def fetch_fundamentals(ticker: str) -> Optional[dict]:
             except (TypeError, ValueError):
                 pass
 
-    sector = None
-    industry = None
+    # Sector + industry from TICKERS.parquet — required so compute_target_price
+    # uses sector-specific multiples (matches what the screener passes).
+    tmeta = _load_tickers_meta().get(ticker.upper(), {})
 
     return {
         "ticker":          ticker.upper(),
@@ -122,8 +174,10 @@ def fetch_fundamentals(ticker: str) -> Optional[dict]:
         "eps_series":      eps,
         "marketcap":       marketcap,
         "cash_on_hand":    cash_on_hand,
-        "sector":          sector,
-        "industry":        industry,
+        "shares_diluted":  shares_diluted,
+        "sector":          tmeta.get("sector"),
+        "industry":        tmeta.get("industry"),
+        "company_name":    tmeta.get("name"),
         "n_quarters":      tk.height,
         "latest_datekey":  str(tk["datekey"].to_list()[-1]) if tk.height else None,
     }
