@@ -19,6 +19,8 @@
 | Trailing-median fallback PT (v20) | 🟢 | Shipped May 12 — VISN-style names get a PT instead of $0 |
 | Visible conviction score 0-100 + low-conviction filter (v21) | 🟢 | Shipped May 12 — color badge on Top 40, scale on report, 6-bucket filter chips |
 | **PT consistency audit + fix (v22)** | 🟢 | Shipped May 18 — screener was using legacy PT function. Migrated to canonical engine. Aligned dimension (ARQ), history window (3y), sector lookup, shares_diluted. GDRX now matches between Top 40 and report. |
+| **Phone PWA re-tune (v23)** | 🟢 | Shipped May 18 — mobile CSS updated for v22 layout (18-col Top 40, 5 macro chips, conviction filter, report-view) |
+| **Tier 1+2 quant signals (v24)** | 🟢 | Shipped May 18 — Hurst, Kalman, AR(2), OU half-life, BB squeeze (single-name patterns) + cross-sectional rank, sector-relative momentum, **PCA residual mean-reversion** (universe-level). 39 entrants across 12 families. |
 | Wait for new entrants + regime tags to accumulate 200+ samples each | 🔵 | ~5+ days since v17/v18 — per-family champions + regime IC should be rotating now |
 
 ---
