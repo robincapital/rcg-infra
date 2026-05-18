@@ -212,6 +212,13 @@ class ConversationState:
            between them. Collapse text blocks into the last one; keep only
            the latest user message at any chain end.
 
+        4. **Dedupe tool_result blocks within a user message.** When the
+           same tool_use_id appears twice (real result + stub from a prior
+           repair, or two collapsed messages), keep only one — preferring
+           the longer (real) content over short stubs and non-error over
+           is_error. Anthropic rejects any user message with duplicate
+           tool_result ids.
+
         Returns total repair count. Idempotent.
         """
         msgs = self.data.get("messages", [])
@@ -280,6 +287,44 @@ class ConversationState:
                     n_repairs += len(missing)
             i += 1
 
+        # ── Pass 2.5: dedupe tool_result blocks within each user message ──
+        # Prior repair passes could leave duplicate tool_result blocks
+        # (e.g. real result + stub for same tool_use_id). Anthropic rejects
+        # any user message that has two tool_result blocks with the same id.
+        # Keep the LONGER content (real result wins over short stub) and
+        # prefer is_error=False over is_error=True when lengths tie.
+        for m in msgs:
+            if m.get("role") != "user":
+                continue
+            content = m.get("content", [])
+            if not isinstance(content, list):
+                continue
+            by_id: dict = {}      # tool_use_id -> (index_in_deduped, block)
+            deduped: list = []
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    tid = b.get("tool_use_id")
+                    if tid in by_id:
+                        existing_idx, existing = by_id[tid]
+                        new_len = len(str(b.get("content", "")))
+                        old_len = len(str(existing.get("content", "")))
+                        # Prefer longer content; if tied, prefer non-error
+                        prefer_new = (new_len > old_len) or (
+                            new_len == old_len
+                            and not b.get("is_error", False)
+                            and existing.get("is_error", False)
+                        )
+                        if prefer_new:
+                            deduped[existing_idx] = b
+                            by_id[tid] = (existing_idx, b)
+                        n_repairs += 1
+                    else:
+                        by_id[tid] = (len(deduped), b)
+                        deduped.append(b)
+                else:
+                    deduped.append(b)
+            m["content"] = deduped
+
         # ── Pass 3: collapse runs of consecutive user messages ────────
         # The conversation must alternate (or at least never have two
         # user messages in a row without an assistant between them).
@@ -329,6 +374,38 @@ class ConversationState:
                     n_repairs += 1
             i = run_end
         msgs = compressed
+
+        # ── Pass 4: final dedupe sweep (Pass 3 may have re-merged dupes) ──
+        for m in msgs:
+            if m.get("role") != "user":
+                continue
+            content = m.get("content", [])
+            if not isinstance(content, list):
+                continue
+            by_id: dict = {}
+            deduped: list = []
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    tid = b.get("tool_use_id")
+                    if tid in by_id:
+                        existing_idx, existing = by_id[tid]
+                        new_len = len(str(b.get("content", "")))
+                        old_len = len(str(existing.get("content", "")))
+                        prefer_new = (new_len > old_len) or (
+                            new_len == old_len
+                            and not b.get("is_error", False)
+                            and existing.get("is_error", False)
+                        )
+                        if prefer_new:
+                            deduped[existing_idx] = b
+                            by_id[tid] = (existing_idx, b)
+                        n_repairs += 1
+                    else:
+                        by_id[tid] = (len(deduped), b)
+                        deduped.append(b)
+                else:
+                    deduped.append(b)
+            m["content"] = deduped
 
         self.data["messages"] = msgs
         return n_repairs
