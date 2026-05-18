@@ -61,3 +61,5 @@ src/.finnhub_cache.json
 src/user_pinned.json
 
 src/user_assumptions.json
+
+src/pca_universe.json
