@@ -41,6 +41,7 @@ from pathlib import Path
 sys.path.insert(0, "/home/nixos/Prod/V1/src")
 import signals_db as sdb  # noqa: E402
 import regime_tag  # noqa: E402
+import quant_signals as qs  # noqa: E402  # v24 — pattern + cross-sectional signals
 
 PRICES_PATH = Path("/home/nixos/Prod/V1/src/bloomberg_prices.json")
 
@@ -248,6 +249,23 @@ _boll_20_2   = make_bollinger_pos(20, 2.0)
 _boll_20_25  = make_bollinger_pos(20, 2.5)
 _boll_50     = make_bollinger_pos(50, 2.0)
 
+# ─── v24: quant-signal wrappers (signature: bars-only or (ticker, ctx)) ────
+# Single-name patterns delegate to quant_signals; cross-sectional take
+# (ticker, ctx) so wrap them as factory closures that ignore `bars`.
+def _wrap_pattern(fn, **kw):
+    def wrapped(bars):
+        return fn(bars, **kw) if kw else fn(bars)
+    return wrapped
+
+def _wrap_universe(fn):
+    """Wrap a (ticker, ctx) scorer to a (bars, ticker=None, ctx=None) shape
+    consistent with the rest of MODELS. The main loop calls fn(bars,
+    ticker=ticker, ctx=ctx) — universe scorers ignore bars but use the rest."""
+    def wrapped(bars, ticker=None, ctx=None):
+        return fn(ticker, ctx)
+    return wrapped
+
+
 MODELS = [
     # ─ momentum family (5 variants)
     ("momentum_3bar",      "momentum",        make_momentum(3)),
@@ -294,6 +312,20 @@ MODELS = [
     ("combo_meanrev",      "ensemble",
         make_combo_trend([_mr_10, _mr_20, _mr_40, _rsi_7, _rsi_14, _rsi_21,
                           _boll_20_2, _boll_50])),
+
+    # ─── v24 — Tier 1: single-name pattern signals (5) ────────────────
+    ("hurst_20",                "pattern",        _wrap_pattern(qs.hurst_signal, max_lag=20)),
+    ("kalman_trend_20",         "pattern",        _wrap_pattern(qs.kalman_trend_slope, period=20)),
+    ("ar2_forecast_30",         "arima",          _wrap_pattern(qs.ar2_forecast, period=30)),
+    ("ou_halflife_30",          "pattern",        _wrap_pattern(qs.ou_halflife_signal, period=30)),
+    ("bb_squeeze_breakout_20",  "bollinger_pos",  _wrap_pattern(qs.bb_squeeze_breakout, period=20)),
+
+    # ─── v24 — Tier 2: cross-sectional signals (3) ────────────────────
+    # These use the universe context (ret_5bar, sector ETFs, PCA residuals)
+    # computed once per fire in main(). Wrappers ignore `bars` and read ctx.
+    ("relative_strength_rank_5bar", "cross_sectional", _wrap_universe(qs.relative_strength_rank)),
+    ("sector_relative_momentum",    "cross_sectional", _wrap_universe(qs.sector_relative_momentum)),
+    ("pca_residual_mr",             "cross_sectional", _wrap_universe(qs.pca_residual_mr)),
 ]
 
 
@@ -308,12 +340,20 @@ def main():
         return
 
     # Tag every fire of this batch with the current market regime so the
-    # leaderboard can compute IC stratified by regime later. Same regime is
-    # written to every model's run in this batch.
+    # leaderboard can compute IC stratified by regime later.
     regime = regime_tag.compute_regime()
     print(f"[models] regime: {regime['regime_label']}  (vix={regime['vix']}, spy_5d={regime['spy_5d_pct']}%)")
     print(f"[models] {len(MODELS)} entrants across families: "
           f"{sorted({m[1] for m in MODELS})}")
+
+    # v24: compute universe context once per fire so cross-sectional entrants
+    # (rank, sector-rel, pca-residual) can read the same precomputed features
+    # for every ticker without re-doing the PCA SVD.
+    sector_map = qs.load_sector_map_from_screener_csv()
+    ctx = qs.build_universe_context(watchlist, sector_map=sector_map)
+    print(f"[models] universe ctx: {len(ctx.get('ret_5bar') or {})} tickers, "
+          f"{len(ctx.get('sector_etf_5bar_for_ticker') or {})} sector-matched, "
+          f"{len(ctx.get('pca_residuals') or {})} PCA-residual scored")
 
     runs = {}
     n_signals = 0
@@ -335,10 +375,14 @@ def main():
             if not w or w.get("error"):
                 continue
             bars = w.get("bars") or []
-            if not bars:
-                continue
+            # Cross-sectional entrants don't need per-ticker bars (they read
+            # from ctx) but they DO need to fire per ticker. Single-name
+            # entrants need bars. Try calling with ctx; fall back to bars-only.
             try:
-                score = fn(bars)
+                try:
+                    score = fn(bars, ticker=ticker, ctx=ctx)
+                except TypeError:
+                    score = fn(bars)
             except Exception as e:
                 print(f"[models]  {model_name} {ticker}: {e}")
                 continue

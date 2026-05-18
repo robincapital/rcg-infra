@@ -33,17 +33,25 @@ HORIZONS = ["30min", "60min", "4h"]
 # to be added here OR they'll show as "other".
 def family_from_model(model_name: str) -> str:
     n = model_name.lower()
-    if n == "bbg_predictive_composite": return "bbg_composite"
-    if n.startswith("momentum_"):       return "momentum"
-    if n.startswith("mean_rev"):        return "mean_reversion"
-    if n.startswith("rsi_extreme"):     return "rsi_extreme"
-    if n.startswith("sma_cross"):       return "sma_cross"
-    if n.startswith("ema_cross"):       return "ema_cross"
-    if n.startswith("bollinger_pos"):   return "bollinger_pos"
-    if n.startswith("donchian_break"):  return "donchian_break"
-    if n.startswith("lr_slope"):        return "lr_slope"
-    if n.startswith("arima"):           return "arima"
-    if n.startswith("combo_"):          return "ensemble"
+    if n == "bbg_predictive_composite":      return "bbg_composite"
+    if n.startswith("momentum_"):            return "momentum"
+    if n.startswith("mean_rev"):             return "mean_reversion"
+    if n.startswith("rsi_extreme"):          return "rsi_extreme"
+    if n.startswith("sma_cross"):            return "sma_cross"
+    if n.startswith("ema_cross"):            return "ema_cross"
+    if n.startswith("bb_squeeze"):           return "bollinger_pos"   # v24
+    if n.startswith("bollinger_pos"):        return "bollinger_pos"
+    if n.startswith("donchian_break"):       return "donchian_break"
+    if n.startswith("lr_slope"):             return "lr_slope"
+    if n.startswith("arima") or n.startswith("ar2"):  return "arima"  # v24
+    if n.startswith("combo_"):               return "ensemble"
+    # v24 — new families
+    if n.startswith("hurst") or n.startswith("kalman") or n.startswith("ou_halflife"):
+        return "pattern"
+    if (n.startswith("relative_strength_rank")
+            or n.startswith("sector_relative_momentum")
+            or n.startswith("pca_residual")):
+        return "cross_sectional"
     return "other"
 
 
