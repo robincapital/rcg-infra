@@ -24,10 +24,127 @@ captures the broad market move; what's left is the alpha to trade.
 """
 from __future__ import annotations
 
+import csv
+import json
 import math
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional, Sequence
 
 import numpy as np
+
+# ════════════════════════════════════════════════════════════════════
+# PCA UNIVERSE — top-N high-conviction names, frozen weekly
+# ════════════════════════════════════════════════════════════════════
+# Why a curated universe instead of the full 118-name watchlist:
+#   PCA on a heterogeneous mix of cross-asset ETFs + small caps + macro
+#   proxies produces a noisy PC1 that mostly captures generic market beta
+#   with low statistical confidence. A focused universe of high-conviction
+#   trending names produces a meaningful PC1 (the dominant common factor
+#   among names we'd actually trade) and a cleaner idiosyncratic residual.
+#
+# Selection: top 20 by composite_score, filtered to names with engine
+#   upside > +20% (high-conviction longs only). Read from the daily
+#   screener_universe.csv.
+#
+# Cadence: weekly hold. Universe frozen Monday → following Monday so
+#   residuals are comparable within the week. When the universe rotates,
+#   the meta-model sees a discontinuity — acceptable since training is
+#   weekly-walk-forward.
+#
+# Drift handling: naive recompute on each rebalance. No transition window.
+PCA_UNIVERSE_PATH       = Path("/home/nixos/Prod/V1/src/pca_universe.json")
+PCA_TOP_N               = 20
+PCA_MIN_UPSIDE_PCT      = 20.0    # engine upside floor for membership
+SCREENER_CSV_PATH       = "/home/nixos/Prod/V1/outputs/screener_universe.csv"
+
+
+def _next_monday_utc(now: datetime) -> datetime:
+    """Return next Monday 00:00 UTC strictly after `now`."""
+    # weekday(): Mon=0, Sun=6
+    days_ahead = (7 - now.weekday()) % 7
+    if days_ahead == 0:
+        days_ahead = 7
+    target = (now + timedelta(days=days_ahead)).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    return target
+
+
+def load_pca_universe(force_rebuild: bool = False) -> dict:
+    """
+    Load the frozen high-conviction universe used for the PCA residual signal.
+    Auto-rebuilds when:
+      · file missing
+      · next_rebalance datetime has passed (Monday rollover)
+      · force_rebuild=True
+
+    Returns the full universe descriptor (frozen_at, next_rebalance, criteria,
+    universe list). Never raises — falls back to empty universe + logs reason.
+    """
+    now = datetime.now(timezone.utc)
+    existing = None
+    if PCA_UNIVERSE_PATH.exists():
+        try:
+            existing = json.loads(PCA_UNIVERSE_PATH.read_text())
+        except Exception:
+            existing = None
+
+    needs_rebuild = force_rebuild or existing is None
+    if existing and not needs_rebuild:
+        try:
+            next_rb = datetime.fromisoformat(existing["next_rebalance"])
+            if next_rb.tzinfo is None:
+                next_rb = next_rb.replace(tzinfo=timezone.utc)
+            if now >= next_rb:
+                needs_rebuild = True
+        except Exception:
+            needs_rebuild = True
+
+    if not needs_rebuild:
+        return existing
+
+    # Build from screener CSV — top-N by composite, filtered by upside floor
+    candidates = []
+    rebuild_error = None
+    try:
+        with open(SCREENER_CSV_PATH) as fh:
+            for row in csv.DictReader(fh):
+                t = (row.get("ticker") or "").upper()
+                if not t:
+                    continue
+                try:
+                    composite = float(row.get("composite_score") or 0)
+                    # CSV stores upside as a fraction (0.83 = 83%)
+                    upside_pct = float(row.get("upside_pct") or 0) * 100
+                except (TypeError, ValueError):
+                    continue
+                if upside_pct < PCA_MIN_UPSIDE_PCT:
+                    continue
+                candidates.append((t, composite, upside_pct))
+    except Exception as e:
+        rebuild_error = str(e)[:200]
+
+    candidates.sort(key=lambda x: -x[1])     # composite descending
+    universe = [c[0] for c in candidates[:PCA_TOP_N]]
+
+    payload = {
+        "frozen_at":       now.isoformat(),
+        "next_rebalance":  _next_monday_utc(now).isoformat(),
+        "selection":       {
+            "method":           "top_N_by_composite",
+            "top_n":            PCA_TOP_N,
+            "min_upside_pct":   PCA_MIN_UPSIDE_PCT,
+        },
+        "universe":        universe,
+        "n_candidates":    len(candidates),
+        "rebuild_error":   rebuild_error,
+        "previous":        (existing.get("universe") if existing else None),
+    }
+    try:
+        PCA_UNIVERSE_PATH.write_text(json.dumps(payload, indent=2))
+    except Exception:
+        pass
+    return payload
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -342,23 +459,34 @@ def build_universe_context(watchlist: dict, sector_map: Optional[dict] = None) -
         if etf and etf in ret_5bar:
             sector_etf_5bar_for_ticker[ticker] = ret_5bar[etf]
 
-    # PCA on the bar-to-bar log-return matrix. Use a sliding window — try
-    # 10 → 7 → 5 → 4 bars, taking the widest one where ≥10 tickers qualify.
-    # Intraday BBG bars accumulate across the day; this lets PCA fire from
-    # the first cycle of the morning instead of waiting for a full day's
-    # worth of bars.
+    # PCA only on the FROZEN HIGH-CONVICTION UNIVERSE (top-20 by composite +
+    # upside floor, rebalanced weekly). Running PCA on the full 118-name
+    # watchlist produced too-noisy a PC1 — the curated universe yields a
+    # statistically meaningful dominant factor among names we'd actually
+    # trade. Tickers outside the universe get None (entrant doesn't fire
+    # for them).
+    pca_universe_info = load_pca_universe()
+    pca_universe_set = set(pca_universe_info.get("universe") or [])
+
     pca_residuals: dict = {}
+    pca_n_bars_used = None
     try:
+        # Sliding window: 10 → 7 → 5 → 4 bars, take widest where ≥5 of the
+        # universe qualify. (Min lowered from 10 since universe is smaller.)
         n_bars_to_use = 4
         for candidate in (10, 7, 5, 4):
-            qual = sum(1 for t, c in closes_by_ticker.items()
-                       if len(c) >= candidate + 1 and all(x > 0 for x in c[-(candidate+1):]))
-            if qual >= 10:
+            qual = sum(1 for t in pca_universe_set
+                       if t in closes_by_ticker
+                       and len(closes_by_ticker[t]) >= candidate + 1
+                       and all(x > 0 for x in closes_by_ticker[t][-(candidate + 1):]))
+            if qual >= 5:
                 n_bars_to_use = candidate
                 break
+
         rows, tickers = [], []
-        for t, closes in closes_by_ticker.items():
-            if len(closes) < n_bars_to_use + 1:
+        for t in pca_universe_set:
+            closes = closes_by_ticker.get(t)
+            if not closes or len(closes) < n_bars_to_use + 1:
                 continue
             tail = closes[-(n_bars_to_use + 1):]
             if any(c <= 0 for c in tail):
@@ -367,13 +495,12 @@ def build_universe_context(watchlist: dict, sector_map: Optional[dict] = None) -
                         for i in range(1, len(tail))]
             rows.append(log_rets)
             tickers.append(t)
-        if len(rows) >= 10:
+
+        if len(rows) >= 5:
             R = np.asarray(rows, dtype=float)
-            # De-mean across tickers so PC1 captures the shared market move
             R_centered = R - R.mean(axis=0)
             U, S, Vt = np.linalg.svd(R_centered, full_matrices=False)
             pc1_dir = Vt[0]
-            # Compute total return + PC1-explained portion per ticker
             raw_residuals = {}
             for i, t in enumerate(tickers):
                 pc1_loading = float(U[i, 0] * S[0])
@@ -385,13 +512,18 @@ def build_universe_context(watchlist: dict, sector_map: Optional[dict] = None) -
             sd = float(np.std(vals))
             if sd > 0:
                 pca_residuals = {t: (v - m) / sd for t, v in raw_residuals.items()}
+            pca_n_bars_used = n_bars_to_use
     except Exception:
-        pass    # cross-sectional residual entrant just returns None for everyone
+        pass
 
     return {
         "ret_5bar":                    ret_5bar,
         "sector_etf_5bar_for_ticker":  sector_etf_5bar_for_ticker,
         "pca_residuals":               pca_residuals,
+        "pca_universe":                list(pca_universe_set),
+        "pca_universe_frozen_at":      pca_universe_info.get("frozen_at"),
+        "pca_universe_next_rebalance": pca_universe_info.get("next_rebalance"),
+        "pca_n_bars_used":             pca_n_bars_used,
     }
 
 

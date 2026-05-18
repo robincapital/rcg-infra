@@ -351,9 +351,13 @@ def main():
     # for every ticker without re-doing the PCA SVD.
     sector_map = qs.load_sector_map_from_screener_csv()
     ctx = qs.build_universe_context(watchlist, sector_map=sector_map)
+    pca_u = ctx.get("pca_universe") or []
     print(f"[models] universe ctx: {len(ctx.get('ret_5bar') or {})} tickers, "
           f"{len(ctx.get('sector_etf_5bar_for_ticker') or {})} sector-matched, "
-          f"{len(ctx.get('pca_residuals') or {})} PCA-residual scored")
+          f"{len(ctx.get('pca_residuals') or {})} PCA-residual scored "
+          f"(universe={len(pca_u)} frozen={ctx.get('pca_universe_frozen_at','?')[:10]}, "
+          f"next_rebal={ctx.get('pca_universe_next_rebalance','?')[:10]}, "
+          f"bars_used={ctx.get('pca_n_bars_used')})")
 
     runs = {}
     n_signals = 0
