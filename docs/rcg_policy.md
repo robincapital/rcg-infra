@@ -254,7 +254,7 @@ records_first_two_years_storage: easily_accessible
 records_storage_default: local_nixos_box   # GCP mirror deferred per MM 2026-05-18
 cco_contact:
   slack: "@ashley"     # workspace: rcg-hac9149 — exact user ID populated post-onboarding
-  email: "ashley@robincapitalgroup.com"   # TBC by MM
+  email: "aschott@robincapitalgroup.com"
 ```
 
 ---
@@ -282,7 +282,7 @@ When the agent needs the CCO (Ashley Schott) — MNPI suspicion, new vendor due 
 | Channel | Address | When to use |
 |---|---|---|
 | **Slack DM** | `@ashley` in the `rcg-hac9149` workspace (her exact Slack user ID is populated in `~/.rcg_agent_config.json` after first onboarding) | Default for real-time / business-hours items |
-| **Email** | `ashley@robincapitalgroup.com` (placeholder — pending Nick's confirmation of exact address) | After-hours, formal compliance records, longer threads |
+| **Email** | `aschott@robincapitalgroup.com` | After-hours, formal compliance records, longer threads |
 
 **Escalation triggers** (when the agent MUST contact Ashley, not just ping MM):
 
