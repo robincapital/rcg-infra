@@ -18,7 +18,8 @@
 | INSUFFICIENT DATA rating (v19) | 🟢 | Shipped May 12 — clean grey banner instead of misleading SELL |
 | Trailing-median fallback PT (v20) | 🟢 | Shipped May 12 — VISN-style names get a PT instead of $0 |
 | Visible conviction score 0-100 + low-conviction filter (v21) | 🟢 | Shipped May 12 — color badge on Top 40, scale on report, 6-bucket filter chips |
-| Wait for new entrants + regime tags to accumulate 200+ samples each | 🔵 | ~48h. By May 14 per-family champions + regime IC will rotate meaningfully |
+| **PT consistency audit + fix (v22)** | 🟢 | Shipped May 18 — screener was using legacy PT function. Migrated to canonical engine. Aligned dimension (ARQ), history window (3y), sector lookup, shares_diluted. GDRX now matches between Top 40 and report. |
+| Wait for new entrants + regime tags to accumulate 200+ samples each | 🔵 | ~5+ days since v17/v18 — per-family champions + regime IC should be rotating now |
 
 ---
 
