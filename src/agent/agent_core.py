@@ -137,19 +137,36 @@ def run_turn(
             return
 
         if response.stop_reason == "max_tokens":
-            # The model ran out of output budget. Post what we have so far + a
-            # note, then nudge it to continue in the next loop iteration. State
-            # stays in BUILDING/RESEARCHING so we don't reset the conversation.
-            partial = _extract_text(response.content)
-            if partial:
-                slack_post_fn(partial)
+            # The model ran out of output budget. The response might contain
+            # complete tool_use blocks that still need to be executed before
+            # we can append a user message (otherwise we'd orphan them and
+            # the next API call would error).
+            partial_text = _extract_text(response.content)
+            if partial_text:
+                slack_post_fn(partial_text)
+
+            # Execute any tool_use blocks that DID complete in this response
+            tool_uses = [b for b in response.content if getattr(b, "type", None) == "tool_use"]
+            for tu in tool_uses:
+                tname = tu.name
+                tin = tu.input or {}
+                label = _format_tool_call_label(tname, tin)
+                slack_post_fn(f"🔧 `{tname}`: {label}")
+                result = tool_execute(tname, tin, allowed_tools)
+                if len(result) > 50_000:
+                    result = result[:50_000] + f"\n... (truncated, {len(result)-50_000} bytes more)"
+                state.add_tool_result(
+                    tool_use_id=tu.id, result=result,
+                    is_error=result.startswith("ERROR") or result.startswith("REFUSED"),
+                )
+
             slack_post_fn(f"_(response was {max_tokens}-token capped — continuing in next iteration)_")
-            # Inject a continuation cue so the model knows to wrap up + summarize
-            state.add_user_message(
-                "Your previous response hit max_tokens. Continue from where you "
-                "left off. If you were in the middle of a spec or analysis, finish "
-                "it concisely without re-stating what's already above."
-            )
+            # If no tool_use blocks fired, inject a continuation cue
+            if not tool_uses:
+                state.add_user_message(
+                    "Your previous response hit max_tokens. Continue from where you "
+                    "left off. Finish concisely without re-stating what's already above."
+                )
             continue
 
         # Tool use phase

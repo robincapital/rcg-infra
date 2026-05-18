@@ -48,6 +48,13 @@ class ConversationState:
         self.path = STATE_DIR / f"{channel}-{self.thread_ts}.json"
         self._lock = threading.Lock()
         self.data = self._load()
+        # Repair any orphaned tool_use blocks left by prior crashes / aborts.
+        # Anthropic rejects messages arrays where a tool_use has no matching
+        # tool_result in the next message. We synthesize stub error results
+        # for orphans so the conversation can continue.
+        n_repairs = self._repair_orphaned_tool_uses()
+        if n_repairs > 0:
+            self.save()
 
     # ─── Persistence ──────────────────────────────────────────────────
     def _load(self) -> Dict:
@@ -185,3 +192,69 @@ class ConversationState:
             if isinstance(block, dict) and block.get("type") == "tool_result":
                 return True
         return False
+
+    def _repair_orphaned_tool_uses(self) -> int:
+        """
+        Scan the message history for assistant tool_use blocks that lack a
+        corresponding tool_result in the immediately-following user message.
+        Inserts stub tool_result blocks for each orphan so the Anthropic API
+        accepts the messages array. Returns the number of repairs made.
+
+        Called automatically on every conversation load. Idempotent — running
+        twice is a no-op.
+        """
+        msgs = self.data.get("messages", [])
+        n_repairs = 0
+        i = 0
+        while i < len(msgs):
+            msg = msgs[i]
+            if msg.get("role") != "assistant":
+                i += 1
+                continue
+            # Find tool_use ids in this assistant message
+            tool_use_ids = []
+            for block in msg.get("content", []):
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    tool_use_ids.append(block.get("id"))
+            if not tool_use_ids:
+                i += 1
+                continue
+            # Check the next message for matching tool_results
+            next_msg = msgs[i + 1] if i + 1 < len(msgs) else None
+            result_ids = set()
+            if next_msg and next_msg.get("role") == "user":
+                for block in next_msg.get("content", []):
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        result_ids.add(block.get("tool_use_id"))
+            missing = [tid for tid in tool_use_ids if tid not in result_ids]
+            if missing:
+                # Build a stub user message with synthetic tool_results
+                stub_blocks = [
+                    {
+                        "type":         "tool_result",
+                        "tool_use_id":  tid,
+                        "content":      "ERROR: prior tool call was aborted (agent restart, max_tokens, or crash). Continuing without this result.",
+                        "is_error":     True,
+                    }
+                    for tid in missing
+                ]
+                if next_msg and next_msg.get("role") == "user":
+                    # Augment existing user message with stub results
+                    existing_content = next_msg.get("content", [])
+                    if not isinstance(existing_content, list):
+                        existing_content = [{"type": "text", "text": str(existing_content)}]
+                    next_msg["content"] = stub_blocks + existing_content
+                    n_repairs += len(missing)
+                else:
+                    # Insert a brand-new user message after the orphan
+                    repair_msg = {
+                        "role":    "user",
+                        "content": stub_blocks,
+                        "_meta":   {"repair": True,
+                                    "ts":     datetime.now(timezone.utc).isoformat()},
+                    }
+                    msgs.insert(i + 1, repair_msg)
+                    n_repairs += len(missing)
+            i += 1
+        self.data["messages"] = msgs
+        return n_repairs
