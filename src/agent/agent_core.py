@@ -35,7 +35,9 @@ from tool_wrapper import get_schemas_for_hat
 
 MAX_TOOL_LOOPS = 30        # safety cap on the agentic loop per task
 DEFAULT_MODEL  = "claude-sonnet-4-5"
-MAX_TOKENS_OUT = 4096
+DEFAULT_MAX_TOKENS_OUT = 16384   # Sonnet 4.5 supports up to 64k; 16k handles
+                                  # comprehensive specs, multi-file diffs, etc.
+                                  # Override via config["max_tokens_out"] if needed.
 
 
 def run_turn(
@@ -53,6 +55,7 @@ def run_turn(
     Calls slack_post_fn() multiple times during the loop to surface progress.
     """
     model = config.get("anthropic_model") or DEFAULT_MODEL
+    max_tokens = config.get("max_tokens_out") or DEFAULT_MAX_TOKENS_OUT
     api_key = _load_api_key()
     client = anthropic.Anthropic(api_key=api_key)
 
@@ -101,7 +104,7 @@ def run_turn(
         try:
             response = client.messages.create(
                 model=model,
-                max_tokens=MAX_TOKENS_OUT,
+                max_tokens=max_tokens,
                 system=system_prompt,
                 tools=tool_schemas,
                 messages=state.messages_for_api(),
@@ -134,9 +137,20 @@ def run_turn(
             return
 
         if response.stop_reason == "max_tokens":
-            slack_post_fn("⚠️ hit max_tokens — response truncated. Reply to continue or `cancel`.")
-            state.set_state("IDLE")
-            return
+            # The model ran out of output budget. Post what we have so far + a
+            # note, then nudge it to continue in the next loop iteration. State
+            # stays in BUILDING/RESEARCHING so we don't reset the conversation.
+            partial = _extract_text(response.content)
+            if partial:
+                slack_post_fn(partial)
+            slack_post_fn(f"_(response was {max_tokens}-token capped — continuing in next iteration)_")
+            # Inject a continuation cue so the model knows to wrap up + summarize
+            state.add_user_message(
+                "Your previous response hit max_tokens. Continue from where you "
+                "left off. If you were in the middle of a spec or analysis, finish "
+                "it concisely without re-stating what's already above."
+            )
+            continue
 
         # Tool use phase
         if response.stop_reason != "tool_use":
