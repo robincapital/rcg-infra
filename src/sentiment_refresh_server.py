@@ -1017,23 +1017,61 @@ def _build_data_box(ticker: str, fundamentals: dict) -> tuple[dict, list, str]:
         "div_yield_pct":  None,
     }
 
-    # ── Description from shared cache (rcg_report.py writes it; we read it).
-    # Don't import rcg_report — it pulls reportlab+numpy+scipy which aren't
-    # in venv-rcg-prod. Just read the JSON cache directly.
+    # v29.3 — Description source priority (best authoritative first):
+    #   1. Bloomberg CIE_DES from bloomberg_prices.json["descriptions"][T]
+    #      (pulled on every BBG refresh — authoritative terminal-grade text)
+    #   2. Manual override in ticker_descriptions.json (manual: true)
+    #   3. Haiku-generated cached entry in ticker_descriptions.json
+    #   4. New Haiku call (cached for next time)
+    #   5. Synthesized "{company_name} — {industry}" fallback
+    desc_cache_path = Path("/home/nixos/Prod/V1/data/ticker_descriptions.json")
+    cache = {}
     try:
-        desc_cache_path = Path("/home/nixos/Prod/V1/data/ticker_descriptions.json")
         if desc_cache_path.exists():
             cache = json.loads(desc_cache_path.read_text())
-            entry = cache.get(ticker.upper()) or {}
-            description = entry.get("desc") or ""
     except Exception as e:
-        print(f"  [WARN] description load failed for {ticker}: {e}")
+        print(f"  [WARN] desc cache read failed: {e}")
+    cached_entry = cache.get(ticker.upper()) or {}
 
-    # If no cached description, generate via Haiku inline + cache for next time.
-    # When Haiku doesn't recognize the ticker, fall back to a sector/industry
-    # synthesized label so the user always sees SOMETHING.
+    # 1. Try BBG description from latest bloomberg_prices.json
+    bbg_desc = ""
+    try:
+        bbg_path = Path("/home/nixos/Prod/V1/src/bloomberg_prices.json")
+        if bbg_path.exists():
+            bbg = json.loads(bbg_path.read_text())
+            bbg_entry = (bbg.get("descriptions") or {}).get(ticker.upper()) or {}
+            bbg_desc = (bbg_entry.get("desc") or "").strip()
+    except Exception as e:
+        print(f"  [WARN] BBG desc lookup failed: {e}")
+
+    if bbg_desc:
+        description = bbg_desc
+        # Update local cache so other consumers (rcg_report PDF generator) pick it up
+        if cached_entry.get("source") != "bbg" or cached_entry.get("desc") != bbg_desc:
+            cache[ticker.upper()] = {
+                "desc":         bbg_desc,
+                "source":       "bbg",
+                "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                "manual":       False,
+            }
+            try:
+                desc_cache_path.parent.mkdir(parents=True, exist_ok=True)
+                desc_cache_path.write_text(json.dumps(cache, indent=2, sort_keys=True))
+            except Exception as e:
+                print(f"  [WARN] desc cache write failed: {e}")
+    else:
+        # 2. Manual override wins next
+        if cached_entry.get("manual"):
+            description = cached_entry.get("desc") or ""
+        # 3. Cached Haiku entry
+        elif cached_entry.get("desc"):
+            description = cached_entry.get("desc") or ""
+
+    # 4. No cache hit — try Haiku inline + cache result
     if not description:
         description = _generate_description_inline(ticker, fundamentals) or ""
+
+    # 5. Final fallback — synthesize from company_name + industry
     if not description:
         cn = fundamentals.get("company_name") or ticker
         ind = fundamentals.get("industry") or ""
