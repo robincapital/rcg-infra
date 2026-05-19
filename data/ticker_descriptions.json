@@ -1,0 +1,26 @@
+{
+  "AAPL": {
+    "desc": "Apple designs and manufactures iPhones, Macs, iPads, and wearables; operates the App Store and provides services.",
+    "generated_at": "2026-05-19",
+    "manual": false,
+    "name_at_gen": "APPLE INC"
+  },
+  "NVDA": {
+    "desc": "NVIDIA designs and sells GPUs and AI processors for gaming, data centers, and autonomous vehicles.",
+    "generated_at": "2026-05-19",
+    "manual": false,
+    "name_at_gen": "NVIDIA CORP"
+  },
+  "RKLB": {
+    "desc": "Rocket Lab designs and manufactures small-lift launch vehicles and provides satellite launch services to commercial and government customers.",
+    "generated_at": "2026-05-19",
+    "manual": false,
+    "name_at_gen": "ROCKET LAB CORP"
+  },
+  "SOFI": {
+    "desc": "SoFi offers personal loans, student loan refinancing, investing, banking, and insurance products through a digital platform.",
+    "generated_at": "2026-05-19",
+    "manual": false,
+    "name_at_gen": "SOFI TECHNOLOGIES INC"
+  }
+}

@@ -668,7 +668,12 @@ def compute_target_price(
             elif median_qoq >= 0.25: tam_mult = sm["ev_rev"] * 4.0
             else:                    tam_mult = sm["ev_rev"] * 3.0
 
-            discount_rate = 0.25
+            # v28.6 — Change B: cut the PV discount in half for high-conviction
+            # growers (QoQ ≥ 35%). The multipliers above already bake in
+            # conservative bias; a 25% discount on top of that was
+            # belt-and-suspenders. 12.5% is more honest for true growth
+            # names while keeping the discount for slower compounders.
+            discount_rate = 0.125 if median_qoq >= 0.35 else 0.25
             pv_factor     = 1 / (1 + discount_rate) ** 3
             target_ev_eg  = projected_revs[-1] * tam_mult * pv_factor
             target_eq_eg  = target_ev_eg - latest_debt + cash_on_hand
@@ -688,7 +693,7 @@ def compute_target_price(
                     "ann_growth":    round(ann_growth * 100, 1),
                     "tam_mult":      round(tam_mult, 1),
                     "yr3_rev_proj":  round(projected_revs[-1] / 1e6, 1),
-                    "discount_rate": 25,
+                    "discount_rate": int(discount_rate * 100),
                     "sector_anchor": sm["ev_rev"],
                 }
                 if conv > 0:
@@ -791,16 +796,45 @@ def compute_target_price(
     total_conv = sum(convictions.values())
     weights = {k: v / total_conv for k, v in convictions.items()}
 
-    # Emerging boost: when emerging fires, override to 50% / redistribute the rest
+    # Emerging boost: when emerging fires, override to 50% / redistribute the rest.
+    #
+    # v28.6 — Change A: when the company has NEGATIVE trailing EBITDA AND
+    # emerging fires, jump the weight to 100%. Rationale: for unprofitable
+    # growth names the EV/EBITDA model returns garbage (negative implied
+    # PT, or null) and the FCF Yield model returns garbage (cash burn).
+    # Blending them in at 50% drags the price target down to a number
+    # that doesn't reflect any model anyone would actually use to value
+    # the name. With negative EBITDA the only honest valuation is
+    # forward-revenue × multiple, which is exactly what the emerging
+    # growth model computes.
     if "emerging_growth" in weights and emerging:
-        eg_w = 0.50
+        # Detect "no profits to value off" — trailing EBITDA negative on average.
+        # ebitda_clean is set in MODEL 1 above (always defined since
+        # _clean() returns []); checking last 4 quarters.
+        trailing_ebitda = ebitda_clean[-4:] if ebitda_clean else []
+        if trailing_ebitda:
+            ebitda_avg = sum(trailing_ebitda) / len(trailing_ebitda)
+            unprofitable = ebitda_avg < 0
+        else:
+            unprofitable = False
+
+        if unprofitable:
+            eg_w = 1.00
+            result.gates_fired.append("EMERGING_GROWTH_DOMINANT_NEG_EBITDA")
+        else:
+            eg_w = 0.50
+            result.gates_fired.append("EMERGING_GROWTH_BOOST")
+
         others = [k for k in weights if k != "emerging_growth"]
         others_total = sum(weights[k] for k in others)
-        if others_total > 0:
+        if others_total > 0 and eg_w < 1.0:
             for k in others:
                 weights[k] = (weights[k] / others_total) * (1.0 - eg_w)
+        elif eg_w >= 1.0:
+            # Drop other model weights entirely
+            for k in others:
+                weights[k] = 0.0
         weights["emerging_growth"] = eg_w
-        result.gates_fired.append("EMERGING_GROWTH_BOOST")
 
     raw_blend = sum(weights[k] * models[k]["pt"] for k in weights)
 

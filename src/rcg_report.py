@@ -22,7 +22,8 @@ TICKER = "WULF"   # <-- Change this
 # ============================================================
 # IMPORTS + PATHS
 # ============================================================
-import sys, os
+import sys, os, json
+from typing import Optional
 sys.path.insert(0, '/home/nixos/Prod/V1/src')
 
 import numpy as np
@@ -109,7 +110,8 @@ def load_screener_row(ticker):
 # SHARADAR LOADERS
 # ============================================================
 def load_ticker_info(ticker):
-    info = {"name": ticker, "sector": "", "industry": "", "description": ""}
+    info = {"name": ticker, "sector": "", "industry": "",
+            "industry_fallback": "", "description": ""}
     if not SHARADAR_TICKERS.exists() or not HAS_POLARS:
         return info
     tickers = pl.read_parquet(SHARADAR_TICKERS)
@@ -117,11 +119,105 @@ def load_ticker_info(ticker):
     row = tickers.filter(pl.col("ticker") == ticker)
     if row.height > 0:
         r = row.row(0, named=True)
-        info["name"]        = r.get("name", ticker) or ticker
-        info["sector"]      = r.get("sector", "") or ""
-        info["industry"]    = r.get("industry", "") or ""
-        info["description"] = r.get("famaindustry", "") or r.get("sicindustry", "") or ""
+        info["name"]              = r.get("name", ticker) or ticker
+        info["sector"]            = r.get("sector", "") or ""
+        info["industry"]          = r.get("industry", "") or ""
+        info["industry_fallback"] = r.get("famaindustry", "") or r.get("sicindustry", "") or ""
+    # v28.6 — generate a one-sentence company description via Haiku (cached).
+    info["description"] = _company_description(ticker, info["name"], info["sector"],
+                                                info["industry"], info["industry_fallback"])
     return info
+
+
+# ============================================================
+# v28.6 — Company description (Haiku, cached)
+# ============================================================
+# Cache path. Each entry: {ticker: {desc, generated_at, name_at_gen}}.
+# Manual overrides supported: edit the JSON directly and set "manual": true
+# to lock the value (the generator skips it).
+DESCRIPTION_CACHE = Path("/home/nixos/Prod/V1/data/ticker_descriptions.json")
+
+def _load_description_cache() -> dict:
+    if not DESCRIPTION_CACHE.exists():
+        return {}
+    try:
+        return json.loads(DESCRIPTION_CACHE.read_text())
+    except Exception:
+        return {}
+
+def _save_description_cache(cache: dict) -> None:
+    DESCRIPTION_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    DESCRIPTION_CACHE.write_text(json.dumps(cache, indent=2, sort_keys=True))
+
+def _company_description(ticker: str, name: str, sector: str,
+                          industry: str, industry_fallback: str) -> str:
+    """Returns a 1-sentence description of what the company does. Cached.
+    Falls back to sector/industry if Haiku is unreachable."""
+    cache = _load_description_cache()
+    entry = cache.get(ticker, {})
+    cached_desc = entry.get("desc")
+    if cached_desc:
+        return cached_desc
+    # Generate via Haiku
+    desc = _haiku_describe(ticker, name, sector, industry)
+    if desc:
+        cache[ticker] = {
+            "desc":         desc,
+            "generated_at": datetime.now().strftime("%Y-%m-%d"),
+            "name_at_gen":  name,
+            "manual":       False,
+        }
+        try:
+            _save_description_cache(cache)
+        except Exception as e:
+            print(f"  [WARN] failed to save description cache: {e}")
+        return desc
+    # Fallback when Haiku fails: synthesize from industry classification
+    parts = [p for p in (industry, industry_fallback, sector) if p]
+    return f"{name} — {parts[0]}" if parts else name
+
+def _haiku_describe(ticker: str, name: str, sector: str, industry: str) -> Optional[str]:
+    """Call Anthropic Haiku for a 1-sentence company description.
+    Returns None on any error (caller falls back)."""
+    key_path = Path.home() / ".anthropic_api_key"
+    if not key_path.exists():
+        return None
+    try:
+        api_key = key_path.read_text().strip()
+        import urllib.request, urllib.error
+        prompt = (
+            f"Write one factual sentence (max 25 words) describing what {name} ({ticker}) "
+            f"does — their core product or service. No filler like 'the company' or 'a leading'. "
+            f"Just facts. Sector: {sector or 'unknown'}. Industry: {industry or 'unknown'}.\n\n"
+            f"If you don't know this company specifically, output exactly: UNKNOWN"
+        )
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=json.dumps({
+                "model":      "claude-haiku-4-5",
+                "max_tokens": 100,
+                "messages":   [{"role": "user", "content": prompt}],
+            }).encode(),
+            headers={
+                "x-api-key":         api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type":      "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            d = json.loads(resp.read())
+            text = ""
+            for block in d.get("content", []):
+                if block.get("type") == "text":
+                    text += block.get("text", "")
+            text = text.strip().strip('"').strip()
+            if not text or "UNKNOWN" in text.upper():
+                return None
+            # Drop trailing period if model added one (we'll add when rendering)
+            return text[:200]
+    except Exception as e:
+        print(f"  [WARN] Haiku description failed: {type(e).__name__}: {e}")
+        return None
 
 
 def load_fundamentals(ticker):
@@ -133,6 +229,22 @@ def load_fundamentals(ticker):
     return sf1.filter(
         (pl.col("ticker") == ticker) &
         (pl.col("dimension") == "ARQ") &
+        (pl.col("datekey") >= cutoff)
+    ).sort("datekey")
+
+
+def load_fundamentals_yearly(ticker):
+    """v28.6 — load SF1 ARY (As Reported Yearly) for trailing 3 FY EPS.
+    Different dimension from the ARQ feed used elsewhere; we only need
+    a handful of columns so the read is cheap."""
+    if not SHARADAR_SF1.exists() or not HAS_POLARS:
+        return pl.DataFrame()
+    sf1 = pl.read_parquet(SHARADAR_SF1)
+    sf1 = sf1.rename({c: c.lower() for c in sf1.columns})
+    cutoff = datetime.now() - timedelta(days=365 * 5)
+    return sf1.filter(
+        (pl.col("ticker") == ticker) &
+        (pl.col("dimension") == "ARY") &
         (pl.col("datekey") >= cutoff)
     ).sort("datekey")
 
@@ -155,7 +267,11 @@ def load_prices(ticker, days=365):
     ).sort("date")
     if px_col != "close":
         result = result.with_columns(pl.col(px_col).alias("close"))
-    return result.select(["ticker","date","close"])
+    # v28.6 — keep volume column if present so we can compute ADV in run_analysis
+    cols_kept = ["ticker", "date", "close"]
+    if "volume" in result.columns:
+        cols_kept.append("volume")
+    return result.select(cols_kept)
 
 # ============================================================
 # FINNHUB
@@ -839,6 +955,8 @@ def run_analysis(ticker):
     marketcap_s = safe_col("marketcap")
     cash_s      = safe_col("cashnequsd")
     shares_s    = safe_col("shareswadil") or safe_col("shareswa")
+    # v28.6 — new fields surfaced on the data box
+    divyield_s  = safe_col("divyield")     # null for non-payers
 
     fcf_series = []
     if ncfo and capex:
@@ -865,6 +983,49 @@ def run_analysis(ticker):
                      if v is not None and not (isinstance(v,float) and np.isnan(v)) and float(v)>0]
     latest_shares = (shares_clean[-1] if shares_clean else
                      (latest_mktcap/last_price if latest_mktcap and last_price and last_price>0 else None))
+
+    # v28.6 — dividend yield (latest non-null reported value, or None for non-payers)
+    div_yield_pct = None
+    for v in reversed(divyield_s or []):
+        f = cv(v)
+        if f is not None and f > 0:
+            div_yield_pct = f * 100   # Sharadar stores as fraction
+            break
+
+    # v28.6 — yearly EPS for last 3 fiscal years (As Reported Yearly dimension)
+    yearly_eps = []
+    try:
+        fund_y = load_fundamentals_yearly(ticker)
+        if HAS_POLARS and hasattr(fund_y, "height") and fund_y.height > 0:
+            # Prefer EPS diluted; fall back to basic
+            eps_col = ("epsdil" if "epsdil" in fund_y.columns
+                       else ("eps" if "eps" in fund_y.columns else None))
+            if eps_col:
+                eps_vals = fund_y[eps_col].to_list()
+                fy_dates = fund_y["datekey"].to_list() if "datekey" in fund_y.columns else \
+                           fund_y["calendardate"].to_list()
+                # Take last 3 fiscal years
+                for d, e in list(zip(fy_dates, eps_vals))[-3:]:
+                    eps_f = cv(e)
+                    fy = str(d)[:4] if d is not None else ""
+                    yearly_eps.append({"fy": fy, "eps": eps_f})
+    except Exception as e:
+        print(f"  [WARN] yearly EPS load failed: {e}")
+
+    # v28.6 — average daily $ volume (trailing 20 sessions). Computed in
+    # dollars (close × volume) so it's directly comparable across price
+    # levels. Reported in $M for readability.
+    adv_usd = None
+    try:
+        if HAS_POLARS and hasattr(prices, "height") and prices.height >= 5 \
+                and "volume" in prices.columns:
+            tail = prices.tail(20)
+            cl = tail["close"].to_numpy().astype(float)
+            vol = tail["volume"].to_numpy().astype(float)
+            dollar = cl * vol
+            adv_usd = float(np.nanmean(dollar)) if len(dollar) > 0 else None
+    except Exception as e:
+        print(f"  [WARN] ADV calc failed: {e}")
 
     # Trends
     rev_trend,   _, rev_r2   = compute_trend(revenue)
@@ -1085,6 +1246,11 @@ def run_analysis(ticker):
             "margin_expanding":    margin_expanding,"fcf_yield":       fcf_yield,
             "share_change_pct":    share_change_pct,"share_signal":   share_signal,
             "debt_paydown_signal": debt_paydown_signal,"debt_paydown_rate":debt_paydown_rate,
+            # v28.6 — new fields on the data box + EPS history
+            "shares_out":          latest_shares,
+            "div_yield_pct":       div_yield_pct,
+            "yearly_eps":          yearly_eps,
+            "adv_usd":             adv_usd,
         },
         "technicals": {
             "rsi":rsi,"mom_60d":mom_60d,"sma_20":sma_20,"sma_50":sma_50,
@@ -1273,6 +1439,19 @@ def draw_report(c, data):
     c.setFillColor(RCG_GOLD if data["from_screener_csv"] else RCG_TEXT_DIM)
     c.drawString(margin, meta_y, src_badge)
 
+    # v28.6 — Company description line (1 sentence under the data-source badge).
+    # Falls back to industry classification when Haiku is unavailable.
+    desc = (data.get("info") or {}).get("description") or ""
+    if desc:
+        meta_y -= 10
+        c.setFont("Helvetica-Oblique", 7)
+        c.setFillColor(RCG_TEXT)
+        # Wrap to ~100 chars per line; cap at 2 lines so the layout doesn't shift
+        wrapped = _wrap(desc, 110)[:2]
+        for ln in wrapped:
+            c.drawString(margin, meta_y, ln)
+            meta_y -= 9
+
     # ── Column divider line ──────────────────────────────────
     c.setStrokeColor(RCG_BORDER)
     c.setLineWidth(0.4)
@@ -1306,8 +1485,35 @@ def draw_report(c, data):
             shr += f" ({f['share_change_pct']:+.1f}%)"
         dbt = {"active_deleveraging": "Deleveraging", "increasing_leverage": "Increasing",
                "neutral": "Stable"}.get(f.get("debt_paydown_signal", ""), "N/A")
+        # v28.6 — Key Stats block (lives at the top of the snapshot table).
+        # Symbol + 52w range + ADV + shares out + div yield (omitted when null).
+        tech = data.get("technicals", {}) or {}
+        hi52 = tech.get("hi_52"); lo52 = tech.get("lo_52")
+        range_52 = (f"${lo52:.2f}–${hi52:.2f}"
+                    if (lo52 is not None and hi52 is not None) else "N/A")
+        shares_out_str = (f"{f['shares_out']/1e6:.1f}M"
+                          if f.get("shares_out") else "N/A")
+        adv_str = (f"${f['adv_usd']/1e6:.1f}M"
+                   if f.get("adv_usd") else "N/A")
+        div_str = (f"{f['div_yield_pct']:.2f}%"
+                   if f.get("div_yield_pct") is not None else None)
+
         snap_rows = [
+            ("Symbol",           data["ticker"]),
+            ("52-Wk Range",      range_52),
             ("Market Cap",       fmt_money(f["marketcap"])),
+            ("Shares Out.",      shares_out_str),
+            ("Avg Daily Vol",    adv_str),
+        ]
+        if div_str is not None:
+            snap_rows.append(("Dividend Yield", div_str))
+        # Yearly EPS — last 3 fiscal years (most-recent first for readability)
+        for entry in reversed(f.get("yearly_eps") or []):
+            eps_f = entry.get("eps")
+            eps_str = f"${eps_f:.2f}" if eps_f is not None else "N/A"
+            snap_rows.append((f"EPS FY{entry.get('fy','?')}", eps_str))
+        # Existing fundamental rows
+        snap_rows.extend([
             ("Revenue (Q)",      fmt_money(f["latest_revenue"])),
             ("EBITDA (Q)",       fmt_money(f["latest_ebitda"])),
             ("EBITDA Margin",    f"{f['ebitda_margin']*100:.1f}%" if f.get("ebitda_margin") else "N/A"),
@@ -1319,7 +1525,7 @@ def draw_report(c, data):
             ("Debt Coverage",    f"{f['debt_coverage']:.2f}x" if f["debt_coverage"] is not None else "N/A"),
             ("Share Trend",      shr),
             ("Debt Trajectory",  dbt),
-        ]
+        ])
         y = _data_table(c, left_x, y, col_w, snap_rows, bottom=COL_BOTTOM)
         y -= 5
 
