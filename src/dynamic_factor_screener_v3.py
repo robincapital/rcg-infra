@@ -2768,11 +2768,26 @@ def main(market_cap_preset=None, fed_target_rate=None, fed_neutral_rate=None,
         except Exception as _e:
             print(f"  [WARN] could not read user_pinned.json: {_e}")
 
-        final_watchlist = list(dict.fromkeys(macro + pinned + top_tickers_for_bbg + cap_picks))
+        # v28.8 — Also force-include any ticker with a TAM override set
+        # in user_assumptions.json. MM has explicitly opted these into
+        # TAM-based valuation; we want live BBG prices for them so the
+        # dashboard can compute real upside vs the TAM PT (instead of
+        # the placeholder $100 that the engine falls back to).
+        tam_tickers = []
+        try:
+            ua = _load_user_assumptions_cached()
+            for _t, _rec in (ua or {}).items():
+                if (_rec.get("tam") or {}).get("tam_usd_billions"):
+                    tam_tickers.append(_t.upper())
+        except Exception as _e:
+            print(f"  [WARN] could not collect TAM-tagged tickers: {_e}")
+
+        final_watchlist = list(dict.fromkeys(
+            macro + pinned + tam_tickers + top_tickers_for_bbg + cap_picks))
         # Cap at 120 to keep BBG pull reasonable (~30s at hourly cadence)
         final_watchlist = final_watchlist[:120]
-        # Force-include any pinned that got cropped (user expects them tracked)
-        for _t in pinned:
+        # Force-include any pinned OR TAM-tagged that got cropped
+        for _t in pinned + tam_tickers:
             if _t not in final_watchlist:
                 final_watchlist.append(_t)
 
