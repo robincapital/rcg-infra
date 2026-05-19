@@ -1101,6 +1101,24 @@ def run_analysis(ticker):
 
     print("  Computing PT via shared price_targets engine...")
 
+    # v28.8 — Load any user_assumptions overrides (growth sliders + TAM
+    # model inputs) for this ticker so the PDF report reflects the same
+    # PT the dashboard shows. Same file the sentiment_refresh_server reads.
+    _user_overrides = None
+    _user_tam       = None
+    try:
+        import json as _json
+        _assumptions = _json.loads(Path("/home/nixos/Prod/V1/src/user_assumptions.json").read_text())
+        _stored = _assumptions.get(ticker.upper()) or {}
+        _user_overrides = _stored.get("overrides")
+        _user_tam       = _stored.get("tam")
+        if _user_tam and _user_tam.get("tam_usd_billions"):
+            print(f"  Loaded TAM override: TAM=${_user_tam.get('tam_usd_billions')}B "
+                  f"pen={_user_tam.get('penetration_pct')}% "
+                  f"FCF={_user_tam.get('fcf_margin_pct')}%")
+    except Exception as e:
+        print(f"  [WARN] could not load user_assumptions: {e}")
+
     if latest_mktcap and latest_shares and last_price:
         _res = _pt_engine.compute_target_price(
             ebitda_series    = ebitda,
@@ -1117,6 +1135,8 @@ def run_analysis(ticker):
             analyst_target   = cv(analyst.get("target_mean")),
             n_analysts       = int(analyst.get("total_analysts") or 0),
             apply_envelope   = True,
+            growth_overrides = _user_overrides,
+            tam_overrides    = _user_tam,
         )
         internal_target    = _res.target_price
         pt_model_breakdown = _res.breakdown.get("models", {})
@@ -1556,6 +1576,28 @@ def draw_report(c, data):
             ry -= 8.5
         ry -= 2
     ry -= 5
+
+    # v28.8 — TAM-Based Valuation section (only when TAM model fired)
+    tam_data = (data.get("pt_model_breakdown") or {}).get("tam")
+    if tam_data and ry > COL_BOTTOM + 80:
+        ry = _section_header(c, rgt_x, ry, col_w, "TAM-Based Valuation")
+        tam_rows = [
+            ("Total Addressable Market", f"${tam_data.get('tam_usd_billions', 0):.0f}B"
+                                          + (" (capped)" if tam_data.get('tam_capped') else "")),
+            ("Mature Penetration",   f"{tam_data.get('penetration_pct', 0):.1f}%"),
+            ("Mature FCF Margin",    f"{tam_data.get('fcf_margin_pct', 0):.1f}%"),
+            ("Exit FCF Multiple",    f"{tam_data.get('exit_fcf_mult', 0):.1f}x"),
+            ("Years to Maturity",    f"{tam_data.get('years_to_maturity', 5)}"),
+            ("Discount Rate",        f"{tam_data.get('discount_rate', 10)}%"),
+            ("Mature Revenue",       f"${tam_data.get('mature_revenue_b', 0):.2f}B"),
+            ("Mature FCF",           f"${tam_data.get('mature_fcf_b', 0):.2f}B"),
+            ("Mature Equity",        f"${tam_data.get('mature_equity_b', 0):.2f}B"),
+            ("PV @ 5yr",             f"${tam_data.get('pv_equity_b', 0):.2f}B"),
+            ("Net Equity (− debt + cash)", f"${tam_data.get('final_equity_b', 0):.2f}B"),
+            ("PT / share",           f"${tam_data.get('pt', 0):.2f}"),
+        ]
+        ry = _data_table(c, rgt_x, ry, col_w, tam_rows, bottom=COL_BOTTOM)
+        ry -= 5
 
     # Technical Snapshot
     if ry > COL_BOTTOM + 20:

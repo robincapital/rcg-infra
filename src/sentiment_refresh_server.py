@@ -187,6 +187,15 @@ _OVERRIDE_KEYS = (
     "debt_paydown_ann_pct",
 )
 
+# v28.8 — TAM model inputs (Change D). Separate from growth overrides
+# because they feed a different model (compute_tam_model). Set per ticker
+# in user_assumptions.json under the "tam" key.
+_TAM_OVERRIDE_KEYS = (
+    "tam_usd_billions",
+    "penetration_pct",
+    "fcf_margin_pct",
+)
+
 
 def load_assumptions() -> dict:
     if not ASSUMPTIONS_PATH.exists():
@@ -201,10 +210,12 @@ def save_assumptions(data: dict) -> None:
     ASSUMPTIONS_PATH.write_text(json.dumps(data, indent=2, default=str))
 
 
-def compute_pt_payload(ticker: str, overrides: dict | None) -> dict:
+def compute_pt_payload(ticker: str, overrides: dict | None,
+                        tam_overrides: dict | None = None) -> dict:
     """
-    Fetch fundamentals + run the PT engine with `overrides`, return a JSON
-    payload with the engine baseline, the user overrides, and the resulting PT
+    Fetch fundamentals + run the PT engine with `overrides` (growth
+    sliders) and `tam_overrides` (TAM model inputs), return a JSON payload
+    with the engine baseline, the user overrides, and the resulting PT
     + per-model breakdown. Used by GET /assumptions/<T> and POST.
     """
     # Imported lazily so the server starts even if polars/parquet not present
@@ -271,9 +282,21 @@ def compute_pt_payload(ticker: str, overrides: dict | None) -> dict:
     )
     r_default = compute_target_price(**_kw)
 
+    # v28.8 — TAM overrides feed the 5th model. When present, the engine
+    # runs in TAM-dominates mode (D1) for this name.
+    tam_dict = tam_overrides if (
+        tam_overrides and any(tam_overrides.get(k) is not None for k in _TAM_OVERRIDE_KEYS)
+    ) else None
+
     r_user = None
-    if overrides and any(v is not None for v in overrides.values()):
-        r_user = compute_target_price(**_kw, growth_overrides=overrides)
+    has_growth = overrides and any(v is not None for v in overrides.values())
+    if has_growth or tam_dict:
+        kw_user = dict(_kw)
+        if has_growth:
+            kw_user["growth_overrides"] = overrides
+        if tam_dict:
+            kw_user["tam_overrides"] = tam_dict
+        r_user = compute_target_price(**kw_user)
 
     return {
         "ticker":          ticker.upper(),
@@ -283,6 +306,7 @@ def compute_pt_payload(ticker: str, overrides: dict | None) -> dict:
         "price_source":    price_source,   # 'bbg_live' | 'screener_eod' | 'placeholder'
         "baseline":        base,
         "overrides":       overrides or {k: None for k in _OVERRIDE_KEYS},
+        "tam_overrides":   tam_dict or {k: None for k in _TAM_OVERRIDE_KEYS},
         "pt_engine_default": {
             "target_price":  r_default.target_price,
             "upside_pct":    round(r_default.upside_pct * 100, 2) if r_default.upside_pct is not None else None,
@@ -320,6 +344,30 @@ def sanitize_overrides(raw: dict) -> dict:
                 out[k] = round(f, 3)
             except (TypeError, ValueError):
                 out[k] = None
+    return out
+
+
+def sanitize_tam_overrides(raw: dict) -> dict:
+    """v28.8 — Coerce TAM inputs to float | None. Sanity-clip to engine caps."""
+    out = {}
+    for k in _TAM_OVERRIDE_KEYS:
+        v = raw.get(k)
+        if v is None or v == "" or v == "null":
+            out[k] = None
+            continue
+        try:
+            f = float(v)
+            # Clip to defensive ranges. The engine also enforces sector
+            # TAM caps + 20% penetration cap + 40% FCF margin cap.
+            if k == "tam_usd_billions":
+                f = max(0.0, min(20_000.0, f))   # $20T absolute ceiling
+            elif k == "penetration_pct":
+                f = max(0.0, min(50.0, f))       # 50% absolute (engine caps at 20%)
+            elif k == "fcf_margin_pct":
+                f = max(0.0, min(60.0, f))       # 60% absolute (engine caps at 40%)
+            out[k] = round(f, 3)
+        except (TypeError, ValueError):
+            out[k] = None
     return out
 
 
@@ -799,7 +847,8 @@ def build_report(ticker: str) -> dict:
     all_a = load_assumptions()
     stored = all_a.get(ticker) or {}
     overrides = stored.get("overrides")
-    pt_payload = compute_pt_payload(ticker, overrides)
+    tam_ov   = stored.get("tam")
+    pt_payload = compute_pt_payload(ticker, overrides, tam_ov)
     if pt_payload.get("error"):
         return {"ticker": ticker, "error": pt_payload["error"]}
 
@@ -908,7 +957,8 @@ class RefreshHandler(BaseHTTPRequestHandler):
                 all_a = load_assumptions()
                 stored = all_a.get(ticker) or {}
                 overrides = stored.get("overrides")
-                payload = compute_pt_payload(ticker, overrides)
+                tam_ov   = stored.get("tam")
+                payload = compute_pt_payload(ticker, overrides, tam_ov)
                 payload["updated_at"]  = stored.get("updated_at")
                 payload["llm_summary"] = stored.get("llm_summary")
                 payload["llm_rating"]  = stored.get("llm_rating")
@@ -1025,17 +1075,31 @@ class RefreshHandler(BaseHTTPRequestHandler):
                     return
 
                 overrides = sanitize_overrides(body)
-                # Reject if all values are None — that's effectively a DELETE
-                if not any(v is not None for v in overrides.values()):
+                # v28.8 — TAM overrides come in same body under "tam" sub-dict
+                # OR as flat fields tam_usd_billions / penetration_pct / fcf_margin_pct
+                tam_raw = body.get("tam") if isinstance(body.get("tam"), dict) else body
+                tam_overrides = sanitize_tam_overrides(tam_raw or {})
+                tam_any = any(v is not None for v in tam_overrides.values())
+                growth_any = any(v is not None for v in overrides.values())
+
+                # Reject if NEITHER growth nor TAM provided — use DELETE to clear
+                if not growth_any and not tam_any:
                     self._send_json(400, {"error": "no overrides provided; use DELETE to clear"})
                     return
 
                 with _assumptions_lock:
                     all_a = load_assumptions()
                     prev = all_a.get(ticker) or {}
+                    # Merge — if user sends only growth, preserve any existing TAM
+                    # (and vice versa). Explicit DELETE clears everything.
+                    merged_growth = overrides if growth_any else (prev.get("overrides")
+                                                                   or {k: None for k in _OVERRIDE_KEYS})
+                    merged_tam    = tam_overrides if tam_any else (prev.get("tam")
+                                                                    or {k: None for k in _TAM_OVERRIDE_KEYS})
                     # New overrides invalidate any cached LLM summary
                     all_a[ticker] = {
-                        "overrides":   overrides,
+                        "overrides":   merged_growth,
+                        "tam":         merged_tam,
                         "updated_at":  datetime.now(timezone.utc).isoformat(),
                         "llm_summary": None,
                         "llm_rating":  None,
@@ -1043,11 +1107,11 @@ class RefreshHandler(BaseHTTPRequestHandler):
                     save_assumptions(all_a)
 
                 # Recompute PT with the new overrides and return it
-                payload = compute_pt_payload(ticker, overrides)
+                payload = compute_pt_payload(ticker, merged_growth, merged_tam)
                 payload["updated_at"]  = all_a[ticker]["updated_at"]
                 payload["llm_summary"] = None
                 payload["llm_rating"]  = None
-                print(f"[assumptions] +{ticker} {overrides}")
+                print(f"[assumptions] +{ticker} growth={overrides} tam={tam_overrides}")
                 self._send_json(200, payload)
             except Exception as e:
                 self._send_json(500, {"error": str(e)})

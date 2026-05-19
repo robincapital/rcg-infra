@@ -1059,8 +1059,14 @@ def compute_target_price(
     result.breakdown = breakdown
 
     # ── GATE B: ENVELOPE TO CONSENSUS ────────────────────────
+    # v28.8 — Skip envelope clipping when TAM model fires. The MM has
+    # explicitly set TAM inputs for this ticker; clipping the result
+    # toward analyst consensus would override their analytical call.
+    # Analyst target still appears in the report as a reference line.
     final_pt = post_haircut
-    if apply_envelope and analyst_target and analyst_target > 0:
+    if tam_fired and apply_envelope:
+        result.gates_fired.append("ENVELOPE_SKIPPED_TAM_DOMINANT")
+    if apply_envelope and not tam_fired and analyst_target and analyst_target > 0:
         final_pt, src, flagged = envelope_to_consensus(
             internal_pt   = post_haircut,
             analyst_target = analyst_target,
