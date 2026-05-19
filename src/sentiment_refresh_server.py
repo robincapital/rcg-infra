@@ -1030,9 +1030,18 @@ def _build_data_box(ticker: str, fundamentals: dict) -> tuple[dict, list, str]:
         print(f"  [WARN] description load failed for {ticker}: {e}")
 
     # If no cached description, generate via Haiku inline + cache for next time.
-    # Best-effort — stays empty if Haiku unreachable.
+    # When Haiku doesn't recognize the ticker, fall back to a sector/industry
+    # synthesized label so the user always sees SOMETHING.
     if not description:
         description = _generate_description_inline(ticker, fundamentals) or ""
+    if not description:
+        cn = fundamentals.get("company_name") or ticker
+        ind = fundamentals.get("industry") or ""
+        sec = fundamentals.get("sector") or ""
+        parts = [cn]
+        if ind: parts.append(f"— {ind}")
+        elif sec: parts.append(f"— {sec}")
+        description = " ".join(parts) if parts else ""
 
     # ── 52-week range + ADV from SEP ──
     try:

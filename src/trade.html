@@ -302,8 +302,53 @@
     .red { color: #ef4444 !important; }
     .pos-rich { color: #ef4444 !important; }
     .pos-cheap { color: #22c55e !important; }
-    @page { margin: 0.35in; size: letter; background: #0a1628; }
+    @page { margin: 0.25in; size: letter; background: #0a1628; }
     * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
+
+    /* v29.2 — Fit Investment Analysis Report to 1 page when printed.
+       Compresses the new v29.1 Company Overview block and tightens
+       overall spacing. */
+    #rep-body { font-size: 10px !important; line-height: 1.35 !important; }
+    .rep-header { padding: 6px 12px !important; }
+    .rep-header .left h1 { font-size: 14px !important; }
+    .rep-header .right .tkr { font-size: 22px !important; }
+    .rep-rec { padding: 5px 10px !important; margin-bottom: 6px !important; font-size: 11px !important; }
+    .rep-rec .label { font-size: 13px !important; padding: 2px 8px !important; }
+    .rep-card { padding: 5px 8px !important; margin-bottom: 5px !important; }
+    .rep-card h3 { font-size: 10px !important; margin-bottom: 3px !important; padding-bottom: 2px !important; }
+    .rep-card table { font-size: 9px !important; }
+    .rep-card table td { padding: 1px 4px !important; }
+    .rep-summary { padding: 5px 10px !important; margin: 5px 0 !important; font-size: 10px !important; line-height: 1.4 !important; }
+    .rep-footer { font-size: 7px !important; margin-top: 5px !important; padding-top: 3px !important; }
+    /* Company Overview block (v29.1) — squeeze for print */
+    #rep-body > div[style*="grid-template-columns"] {
+      gap: 6px !important;
+      margin-bottom: 5px !important;
+    }
+    #rep-body > div[style*="grid-template-columns"] > div {
+      padding: 5px 8px !important;
+      font-size: 9px !important;
+    }
+    #rep-body > div[style*="grid-template-columns"] td {
+      padding: 0.5px 0 !important;
+    }
+    /* Description bar */
+    #rep-body > div[style*="border-left:3px solid"] {
+      padding: 4px 10px !important;
+      margin: 4px 0 !important;
+      font-size: 10px !important;
+      line-height: 1.35 !important;
+    }
+    /* PT conviction strip */
+    #rep-body > div[style*="conv-badge"] {
+      padding: 3px 8px !important;
+      margin-bottom: 5px !important;
+      font-size: 9px !important;
+    }
+    table { font-size: 9px !important; }
+    table td, table th { padding: 1.5px 4px !important; }
+    /* Force everything into single page if possible — break-inside avoid */
+    .rep-card, .rep-rec, .rep-header, .rep-summary { page-break-inside: avoid !important; break-inside: avoid !important; }
   }
   .gate-tag { display: inline-block; background: var(--panel); border: 1px solid var(--border); color: var(--dim);
               padding: 1px 6px; border-radius: 3px; margin: 1px 2px; font-size: 10px; font-family: monospace; }
