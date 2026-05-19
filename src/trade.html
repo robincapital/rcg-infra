@@ -2879,7 +2879,16 @@
     const assumptionsPlaceholder =
       `<div id="${assumptionsId}" class="assumptions-panel">` +
       `<div class="empty" style="padding:0.5rem;font-size:11px">loading assumptions…</div></div>`;
+    // v29.4 — Company description (BBG CIE_DES) at top of dropdown when available
+    const descBlock = row.description ? `
+      <div style="background:var(--panel); border-left:3px solid var(--gold); padding:6px 12px;
+                  margin-bottom:8px; font-size:11px; font-style:italic;
+                  color:var(--text); line-height:1.45;">
+        ${row.bbgName ? `<span style="color:var(--gold); font-weight:600; font-style:normal; margin-right:6px;">${row.bbgName}</span> · ` : ''}${row.description}
+      </div>
+    ` : '';
     return `<tr class="detail-row"><td colspan="18">
+      ${descBlock}
       <div class="detail-top">
         <div>${chart}</div>
         <div>${stats}</div>
@@ -3287,6 +3296,8 @@ Signal: ${m.insSignal ?? 'neutral'}`;
       document.getElementById('age').textContent = 'BBG ' + ageStr(bbg.generated_at);
 
       const watchlist = bbg.watchlist || {};
+      // v29.4 — BBG-pulled company descriptions (CIE_DES), keyed by ticker
+      const descriptions = bbg.descriptions || {};
       const enriched = [];
       // Build a unified ticker set: every name in the BBG watchlist (has live data)
       // plus every name in the fundamentals universe (so cap filters can surface
@@ -3350,6 +3361,9 @@ Signal: ${m.insSignal ?? 'neutral'}`;
           insN:      fhIns?.n_transactions_30d ?? 0,
           insScore,
           action, actionRank: action.rank,
+          // v29.4 — Company description from BBG CIE_DES (authoritative)
+          description: descriptions[t]?.desc || '',
+          bbgName:     descriptions[t]?.bbg_name || '',
         });
       });
       lastRows = enriched;
