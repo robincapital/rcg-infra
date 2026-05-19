@@ -21,16 +21,55 @@ Endpoints:
                                        (regenerates LLM narration if assumptions changed)
 """
 
+import socket
 import subprocess
 import json
 import os
 import re
 import threading
 import time
-from http.server import HTTPServer, BaseHTTPRequestHandler
+import urllib.request
+from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+
+# ─── systemd notify socket (v28.2 — textbook watchdog hardening) ──────────
+# We use the raw sd_notify protocol so we don't pull in python3-systemd as a
+# dep. Spec: https://www.freedesktop.org/software/systemd/man/sd_notify.html
+#
+# Behavior under our unit (Type=notify, WatchdogSec=60s):
+#   1. On startup we send READY=1 once the HTTPServer is bound + accepting.
+#   2. A background thread sends WATCHDOG=1 every 20 seconds — BUT only after
+#      successfully self-probing http://127.0.0.1:8085/status with a 10s
+#      timeout. If the probe fails (which happens when the server's main
+#      thread is wedged), we skip the WATCHDOG ping. After 60s without a
+#      ping, systemd kills us and Restart=on-failure brings us back up.
+#   3. Switching to ThreadingHTTPServer (below) means one handler hanging
+#      doesn't block the others — including the /status probe — so the
+#      watchdog stays accurate.
+#
+# This replaces the external cron-based watchdog as the first line of
+# defense; cron stays as belt-and-suspenders.
+_NOTIFY_SOCKET = os.environ.get("NOTIFY_SOCKET")
+
+def _sd_notify(message: str) -> None:
+    """Best-effort send of an sd_notify line. Silent if no NOTIFY_SOCKET
+    (e.g. running outside systemd for development)."""
+    if not _NOTIFY_SOCKET:
+        return
+    addr = _NOTIFY_SOCKET
+    # Linux abstract sockets are encoded as a leading null byte
+    if addr.startswith("@"):
+        addr = "\0" + addr[1:]
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s:
+            s.connect(addr)
+            s.sendall(message.encode("utf-8"))
+    except Exception as e:
+        # Don't crash on notify failures — log + move on
+        print(f"[sd_notify] failed: {e}")
 
 PORT = 8085
 SENTIMENT_SCRIPT = "/home/nixos/Prod/V1/src/market_sentiment_bbg.py"
@@ -1098,8 +1137,35 @@ class RefreshHandler(BaseHTTPRequestHandler):
         pass
 
 
+def _watchdog_loop(interval_sec: int = 20, probe_timeout_sec: int = 10) -> None:
+    """
+    Background thread. Every `interval_sec`, self-probe /status. If the
+    probe succeeds we send WATCHDOG=1 to systemd. If it fails (timeout or
+    error), we skip the ping — systemd will then kill us at WatchdogSec.
+
+    This catches main-thread wedges that would otherwise be invisible
+    (process alive, threads alive, but no requests served).
+    """
+    probe_url = f"http://127.0.0.1:{PORT}/status"
+    while True:
+        try:
+            time.sleep(interval_sec)
+            req = urllib.request.Request(probe_url, headers={"User-Agent": "sd-watchdog/1.0"})
+            with urllib.request.urlopen(req, timeout=probe_timeout_sec) as resp:
+                if resp.status == 200:
+                    _sd_notify("WATCHDOG=1")
+                else:
+                    print(f"[sd_notify] probe got HTTP {resp.status}, skipping ping")
+        except Exception as e:
+            # Probe failed → don't ping. systemd will kill us at WatchdogSec.
+            print(f"[sd_notify] probe failed: {type(e).__name__}: {e} — skipping ping")
+
+
 def main():
-    server = HTTPServer(("0.0.0.0", PORT), RefreshHandler)
+    # ThreadingHTTPServer: one thread per request. If a single handler
+    # blocks (e.g. waiting on SSH subprocess to Windows), other requests
+    # still respond, including the /status probe our watchdog uses.
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), RefreshHandler)
     print(f"Refresh server running on port {PORT}")
     print(f"  GET    http://rcg-nixos:{PORT}/refresh               → trigger refresh")
     print(f"  GET    http://rcg-nixos:{PORT}/status                → check status")
@@ -1111,6 +1177,14 @@ def main():
     print(f"  POST   http://rcg-nixos:{PORT}/assumptions/<TICKER>  → save overrides (body: JSON of growth deltas)")
     print(f"  DELETE http://rcg-nixos:{PORT}/assumptions/<TICKER>  → clear overrides for this ticker")
     print(f"  GET    http://rcg-nixos:{PORT}/report/<TICKER>       → 1-page valuation report (rubric + LLM)")
+
+    # ── systemd integration ──
+    # Notify systemd we're ready (Type=notify in the unit waits for this)
+    _sd_notify("READY=1")
+    if _NOTIFY_SOCKET:
+        print(f"[sd_notify] READY sent; watchdog thread armed (NOTIFY_SOCKET={_NOTIFY_SOCKET})")
+        threading.Thread(target=_watchdog_loop, daemon=True).start()
+
     server.serve_forever()
 
 
