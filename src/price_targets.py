@@ -255,8 +255,14 @@ def _revenue_growth_stats(rev_clean: list) -> Tuple[float, float, bool, float]:
         return 0.0, 0.0, False, 1.0
     median_qoq = float(np.median(qoq))
     ann_growth = (1 + median_qoq) ** 4 - 1
-    high_growth_qs = sum(1 for g in qoq if g >= 0.25)
-    is_emerging    = high_growth_qs >= 2 and median_qoq >= 0.25
+    # v28.7 — Change C: loosened emerging-growth trigger. Previous gate
+    # (QoQ >= 25% in 2 quarters = ~144% annualized growth) was so strict
+    # that even NVDA (+15.3% median QoQ ~ 76% annualized), PLTR (~70%),
+    # RKLB (~55%), and SOFI (~33%) all failed to qualify. New gate fires
+    # on names with median QoQ >= 5% (~22% annualized) AND at least one
+    # quarter showing >= 10% growth. Excludes flat/declining names.
+    high_growth_qs = sum(1 for g in qoq if g >= 0.10)
+    is_emerging    = median_qoq >= 0.05 and high_growth_qs >= 1
 
     if   ann_growth >=  0.60: mult = 2.20
     elif ann_growth >=  0.35: mult = 1.80
@@ -663,10 +669,16 @@ def compute_target_price(
                 rev_proj *= (1 + growth_this_yr)
                 projected_revs.append(rev_proj)
 
+            # v28.7 — Change C: retuned multiplier tiers spanning the
+            # wider growth band the loosened trigger admits. Hypergrowth
+            # band (≥35% QoQ) unchanged. New 3.0x/2.5x tiers cover
+            # 22-46% annualized growth (NVDA, PLTR, RKLB territory).
             if   median_qoq >= 0.50: tam_mult = sm["ev_rev"] * 7.0
             elif median_qoq >= 0.35: tam_mult = sm["ev_rev"] * 5.5
-            elif median_qoq >= 0.25: tam_mult = sm["ev_rev"] * 4.0
-            else:                    tam_mult = sm["ev_rev"] * 3.0
+            elif median_qoq >= 0.25: tam_mult = sm["ev_rev"] * 4.5  # was 4.0
+            elif median_qoq >= 0.15: tam_mult = sm["ev_rev"] * 3.5  # was 3.0
+            elif median_qoq >= 0.10: tam_mult = sm["ev_rev"] * 3.0  # new tier
+            else:                    tam_mult = sm["ev_rev"] * 2.5  # new tier (>= 0.05)
 
             # v28.6 — Change B: cut the PV discount in half for high-conviction
             # growers (QoQ ≥ 35%). The multipliers above already bake in
