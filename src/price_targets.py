@@ -66,6 +66,37 @@ SECTOR_MULTIPLES = {
     "_default":               {"ev_ebitda": 12.0, "ev_rev": 2.0, "fcf_yield": 0.045, "rate_sensitivity": 0.05},
 }
 
+# ─── v28.8 — Sector TAM caps (Change D) ──────────────────────────────────
+# Maximum reasonable total-addressable-market size by sector. Catches typos
+# (a user entering "10000" when they meant "100"). MM-set ceilings; raise
+# specific sector if you have a concrete case that exceeds.
+SECTOR_TAM_CAP_BILLIONS = {
+    "Technology":             10_000.0,   # $10T
+    "Communication Services":  5_000.0,   # $5T
+    "Consumer Discretionary":  5_000.0,
+    "Financials":              5_000.0,
+    "Financial Services":      5_000.0,
+    "Consumer Staples":        3_000.0,   # $3T
+    "Industrials":             3_000.0,
+    "Real Estate":             2_000.0,   # $2T
+    "Healthcare":              1_000.0,   # $1T
+    "Utilities":               1_000.0,
+    "Materials":               1_000.0,
+    "Basic Materials":         1_000.0,
+    "Energy":                    500.0,   # $500B
+    "_default":                1_000.0,
+}
+
+# ─── v28.8 — TAM model constants (Change D) ──────────────────────────────
+# These are fixed (not user-set). Penetration / FCF margin / TAM are per
+# ticker; exit multiple is derived from sector_fcf_yield.
+TAM_YEARS_TO_MATURITY  = 5
+TAM_DISCOUNT_RATE      = 0.10
+TAM_PENETRATION_CAP    = 0.20   # 20% max — no name owns >20% of a major TAM
+TAM_FCF_MARGIN_CAP     = 0.40   # 40% max — NVDA/Visa ceiling
+TAM_PENETRATION_DEFAULT = 0.10
+TAM_FCF_MARGIN_DEFAULT  = 0.20
+
 # Gate A — R² floor on conviction.
 R2_HARD_FLOOR    = 0.20   # below this, the model is killed
 R2_FULL_WEIGHT   = 0.40   # at and above this, full conviction formula
@@ -420,6 +451,100 @@ def _apply_growth_override(default_fwd_sum: float, latest_quarterly: float,
 
 
 # ============================================================
+# v28.8 — TAM Model (Change D)
+# ============================================================
+def compute_tam_model(
+    *,
+    tam_usd_billions:        float,
+    penetration_pct:         Optional[float],
+    fcf_margin_pct:          Optional[float],
+    sector:                  Optional[str],
+    debt_usd:                float,
+    cash_usd:                float,
+    shares_diluted:          float,
+) -> Optional[dict]:
+    """
+    Explicit TAM-based valuation model (5th model alongside EV/EBITDA,
+    EV/Rev, FCF Yield, Emerging Growth).
+
+    Math:
+        mature_revenue       = TAM × penetration_pct
+        mature_fcf           = mature_revenue × fcf_margin_pct
+        mature_equity_value  = mature_fcf × sector_fcf_multiple
+        pv_equity            = mature_equity_value / (1 + r)^years
+        pt_per_share         = (pv_equity - debt + cash) / shares_diluted
+
+    Returns None when:
+      - tam_usd_billions is None or <= 0  (model opted out for this name)
+      - shares_diluted invalid
+      - sector cap exceeded (defensive — flagged via gate)
+      - resulting equity <= 0
+
+    Otherwise returns a dict matching the existing model-output shape so
+    it can blend with the rest.
+    """
+    if not tam_usd_billions or tam_usd_billions <= 0:
+        return None
+    if not shares_diluted or shares_diluted <= 0:
+        return None
+
+    # ── Apply defaults + caps ──
+    pen = penetration_pct if penetration_pct is not None else TAM_PENETRATION_DEFAULT
+    pen = max(0.0, min(pen, TAM_PENETRATION_CAP))
+    mar = fcf_margin_pct  if fcf_margin_pct  is not None else TAM_FCF_MARGIN_DEFAULT
+    mar = max(0.0, min(mar, TAM_FCF_MARGIN_CAP))
+
+    # Sector TAM cap check — defensive against typos. If the user enters a
+    # TAM larger than the sector cap, clip it (and flag for surface in the
+    # report so they can see we clipped).
+    sector_cap = SECTOR_TAM_CAP_BILLIONS.get(sector, SECTOR_TAM_CAP_BILLIONS["_default"])
+    capped = False
+    if tam_usd_billions > sector_cap:
+        tam_usd_billions = sector_cap
+        capped = True
+
+    # ── Exit multiple from sector_fcf_yield ──
+    # mature company trades at sector_fcf_yield ↔ exit_multiple = 1 / yield
+    sm = SECTOR_MULTIPLES.get(sector, SECTOR_MULTIPLES["_default"])
+    exit_fcf_mult = 1.0 / max(sm["fcf_yield"], 1e-6)
+
+    # ── Math ──
+    tam_usd            = tam_usd_billions * 1e9
+    mature_revenue     = tam_usd * pen
+    mature_fcf         = mature_revenue * mar
+    mature_equity      = mature_fcf * exit_fcf_mult
+    pv_factor          = 1.0 / ((1 + TAM_DISCOUNT_RATE) ** TAM_YEARS_TO_MATURITY)
+    pv_equity          = mature_equity * pv_factor
+    final_equity       = pv_equity - debt_usd + cash_usd
+    if final_equity <= 0:
+        return None
+    pt = final_equity / shares_diluted
+
+    return {
+        "pt":                 round(pt, 2),
+        # Use a high conviction (0.95) since this is an explicit MM-set
+        # model — the user has decided this name needs TAM treatment.
+        # Not 1.0 so it can be edged out by analyst envelope in extreme
+        # divergence (per Gate B).
+        "conviction":         0.95,
+        "tam_usd_billions":   round(tam_usd_billions, 1),
+        "tam_capped":         capped,
+        "penetration_pct":    round(pen * 100, 2),
+        "fcf_margin_pct":     round(mar * 100, 2),
+        "exit_fcf_mult":      round(exit_fcf_mult, 2),
+        "sector":             sector,
+        "years_to_maturity":  TAM_YEARS_TO_MATURITY,
+        "discount_rate":      round(TAM_DISCOUNT_RATE * 100, 1),
+        # Pipeline of computed values (so the report can show the math)
+        "mature_revenue_b":   round(mature_revenue / 1e9, 2),
+        "mature_fcf_b":       round(mature_fcf / 1e9, 2),
+        "mature_equity_b":    round(mature_equity / 1e9, 2),
+        "pv_equity_b":        round(pv_equity / 1e9, 2),
+        "final_equity_b":     round(final_equity / 1e9, 2),
+    }
+
+
+# ============================================================
 # CORE PUBLIC API
 # ============================================================
 def compute_target_price(
@@ -441,6 +566,7 @@ def compute_target_price(
     apply_quality_haircut:  bool       = True,
     apply_envelope:         bool       = True,
     growth_overrides:       Optional[dict] = None,
+    tam_overrides:          Optional[dict] = None,
 ) -> TargetPriceResult:
     """
     Compute multi-model conviction-weighted price target with all RCG guardrails.
@@ -713,6 +839,37 @@ def compute_target_price(
         except Exception as e:
             result.gates_fired.append(f"EMERGING_GROWTH_ERROR:{e}")
 
+    # ── v28.8 MODEL 5: TAM Penetration (Change D) ────────────
+    # Fires only when MM has set tam_usd_billions in tam_overrides.
+    # When it fires, it gets 100% blend weight (D1 design) — all other
+    # models are kept in the breakdown for reference but contribute 0 to
+    # the final PT. This is the "I've decided this name should be
+    # valued on TAM, full stop" path.
+    tam_fired = False
+    if tam_overrides and tam_overrides.get("tam_usd_billions"):
+        try:
+            tam_result = compute_tam_model(
+                tam_usd_billions=float(tam_overrides.get("tam_usd_billions") or 0),
+                penetration_pct=(float(tam_overrides["penetration_pct"]) / 100.0
+                                  if tam_overrides.get("penetration_pct") is not None else None),
+                fcf_margin_pct=(float(tam_overrides["fcf_margin_pct"]) / 100.0
+                                 if tam_overrides.get("fcf_margin_pct") is not None else None),
+                sector=sector,
+                debt_usd=latest_debt,
+                cash_usd=cash_on_hand,
+                shares_diluted=share_count,
+            )
+            if tam_result is not None:
+                models["tam"] = tam_result
+                convictions["tam"] = tam_result["conviction"]
+                tam_fired = True
+                result.gates_fired.append("TAM_MODEL_FIRED")
+                if tam_result.get("tam_capped"):
+                    result.gates_fired.append(
+                        f"TAM_CAPPED_BY_SECTOR:{sector}={SECTOR_TAM_CAP_BILLIONS.get(sector, SECTOR_TAM_CAP_BILLIONS['_default'])}B")
+        except Exception as e:
+            result.gates_fired.append(f"TAM_MODEL_ERROR:{e}")
+
     # ── BLEND OR FALLBACK ────────────────────────────────────
     if not convictions:
         result.gates_fired.append("ALL_MODELS_DROPPED_BY_R2_FLOOR_OR_NEG_PROJ")
@@ -808,6 +965,17 @@ def compute_target_price(
     total_conv = sum(convictions.values())
     weights = {k: v / total_conv for k, v in convictions.items()}
 
+    # v28.8 — D1 TAM-dominates: when the TAM model fires, it gets 100%
+    # weight. All other models stay in the breakdown for reference but
+    # contribute 0 to the final PT. MM has explicitly decided this name
+    # needs TAM-based valuation; don't dilute with models we already
+    # know are wrong (negative EBITDA, etc.). This SUPERSEDES the
+    # emerging-growth boost logic below.
+    if tam_fired:
+        for k in list(weights.keys()):
+            weights[k] = 1.0 if k == "tam" else 0.0
+        result.gates_fired.append("TAM_DOMINATES_PT")
+
     # Emerging boost: when emerging fires, override to 50% / redistribute the rest.
     #
     # v28.6 — Change A: when the company has NEGATIVE trailing EBITDA AND
@@ -819,7 +987,10 @@ def compute_target_price(
     # the name. With negative EBITDA the only honest valuation is
     # forward-revenue × multiple, which is exactly what the emerging
     # growth model computes.
-    if "emerging_growth" in weights and emerging:
+    if "emerging_growth" in weights and emerging and not tam_fired:
+        # v28.8: skip the emerging boost entirely when TAM model fires —
+        # D1 means TAM is at 100% and the emerging-growth weight is
+        # already 0. Don't second-guess.
         # Detect "no profits to value off" — trailing EBITDA negative on average.
         # ebitda_clean is set in MODEL 1 above (always defined since
         # _clean() returns []); checking last 4 quarters.
