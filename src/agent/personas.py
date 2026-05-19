@@ -11,6 +11,7 @@ specific role + restrictions.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Dict, List
 
@@ -54,6 +55,21 @@ CRITICAL RULES (apply to every hat):
 6. Honesty over politeness: if Nick's request has a problem (wrong premise,
    safety concern, scope ambiguity), push back. Don't just execute and break
    things.
+
+7. TOOL AVAILABILITY (read this carefully):
+   You have FULL tool access on this NixOS host — the tools wired into your
+   call are the actual hands. Depending on hat you have some subset of:
+   `read`, `grep`, `glob`, `edit`, `write`, `bash`, `postgres_query`, `git`,
+   `ssh`. Look at the tools list in this call to see exactly which ones.
+
+   NEVER tell Nick "I don't have the bash tool" or "I need you to run
+   commands manually" or "Path A / Path B / wait for tool access." You have
+   the tools — call them directly. If a specific tool call fails, surface
+   the actual error message and try a different approach. Manual hand-offs
+   to Nick are only for: (a) approval gates (verbs like "ship it" / "deploy"),
+   (b) explicit policy escalations to CCO, (c) destination state you can't
+   reach without his help (e.g. needing his SSH password for a new host).
+   Tool capability is never a reason to defer to him.
 """
 
 # ─── Per-hat addenda ──────────────────────────────────────────────────────
@@ -284,13 +300,20 @@ def get_hat_display_name(hat_key: str) -> str:
     return HATS.get(hat_key, HATS["orchestrator"])["name"]
 
 
-# Approval-gate verb dictionary — recognized in any incoming message
+# Approval-gate verb dictionary — recognized in any incoming message.
+#
+# Matching rule: WHOLE-WORD / WHOLE-PHRASE only. Bare short tokens like "no",
+# "go", "yes", "wait", "change", "instead" have been removed from this list
+# because they fire on innocuous prose ("this did **no**t work" → cancel,
+# "let me **know** status" → cancel, etc.). If Nick wants to cancel, he can
+# type "cancel" or "stop"; if he wants to approve, he can type "ship it" or
+# "approve" or "go ahead". Verbs are a shortcut, not NLU — be conservative.
 APPROVAL_VERBS = {
-    "approve":   ["ship it", "approve", "approved", "go ahead", "go", "yes", "looks good", "lgtm", "👍"],
-    "deploy":    ["deploy", "push", "ship", "push to main", "merge"],
-    "pr":        ["pr", "open pr", "pull request", "open a pr"],
-    "cancel":    ["cancel", "stop", "abort", "nope", "no", "wait"],
-    "revise":    ["revise", "change", "instead", "rework"],
+    "approve":   ["ship it", "approve", "approved", "go ahead", "looks good", "lgtm", "👍"],
+    "deploy":    ["deploy", "ship to main", "push to main", "merge to main"],
+    "pr":        ["open pr", "open a pr", "pull request"],
+    "cancel":    ["cancel", "stop", "abort", "nope", "kill it", "cancel task"],
+    "revise":    ["revise", "rework", "redo"],
     "status":    ["status", "what's going on", "where are we"],
     "cost":      ["cost", "spend", "budget"],
     "override":  ["override", "override compliance", "i acknowledge"],
@@ -299,10 +322,22 @@ APPROVAL_VERBS = {
 
 def detect_verb(text: str) -> str | None:
     """Return the first approval verb matched in `text`, or None.
-    Case-insensitive substring match against APPROVAL_VERBS values."""
+
+    Whole-word/phrase matching only (case-insensitive). For text patterns,
+    requires word boundaries on both sides so "no" doesn't match inside
+    "not" or "know". Pure-symbol patterns (e.g. emoji) fall back to a
+    simple substring check since `\\b` doesn't apply to non-word chars.
+    """
     lower = (text or "").lower().strip()
+    if not lower:
+        return None
     for verb, patterns in APPROVAL_VERBS.items():
         for p in patterns:
-            if p in lower:
-                return verb
+            # Patterns with at least one alpha char use word-boundary regex.
+            if any(c.isalpha() for c in p):
+                if re.search(r"(?<!\w)" + re.escape(p) + r"(?!\w)", lower):
+                    return verb
+            else:
+                if p in lower:
+                    return verb
     return None
