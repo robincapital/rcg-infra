@@ -45,6 +45,11 @@ body { font-family: 'DM Sans', sans-serif; background: var(--navy); color: var(-
 #pnl-chart   { width: 100%; height: 420px; }
 #dd-chart    { width: 100%; height: 180px; }
 
+.panels-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+.panel-half  { /* sits inside panels-grid */ }
+.panel-chart { width: 100%; height: 280px; }
+.panel-note  { font-size: 0.7rem; color: var(--text-dim); margin-top: 0.5rem; padding-left: 0.5rem; line-height: 1.4; }
+
 .trade-rules-note { font-size: 0.72rem; color: var(--text-dim); padding: 0.75rem 1rem; background: var(--navy-mid); border-left: 3px solid var(--gold); border-radius: 4px; margin-bottom: 1.25rem; line-height: 1.5; }
 .trade-rules-note strong { color: var(--text); }
 
@@ -61,6 +66,8 @@ body { font-family: 'DM Sans', sans-serif; background: var(--navy); color: var(-
     .metric-value { font-size: 1.05rem; }
     #pnl-chart  { height: 320px; }
     #dd-chart   { height: 140px; }
+    .panels-grid { grid-template-columns: 1fr; gap: 0.75rem; }
+    .panel-chart { height: 240px; }
 }
 </style>
 </head>
@@ -123,6 +130,30 @@ body { font-family: 'DM Sans', sans-serif; background: var(--navy); color: var(-
         <div id="dd-chart"></div>
     </div>
 
+    <!-- ─── Supporting panels (Day 5) ─────────────────────────────────── -->
+    <div class="panels-grid">
+        <div class="chart-container panel-half">
+            <div class="chart-title">Calibration — score bucket → avg 30min realized return</div>
+            <div id="calib-chart" class="panel-chart"></div>
+            <div class="panel-note" id="calib-note">Buckets show n observations + hit rate (sign-match, excl. zero returns)</div>
+        </div>
+        <div class="chart-container panel-half">
+            <div class="chart-title">Rolling 30d IC — directional, trailing</div>
+            <div id="rollic-chart" class="panel-chart"></div>
+            <div class="panel-note">Mean of sign(score) × sign(return) over trailing 30 trading days</div>
+        </div>
+        <div class="chart-container panel-half">
+            <div class="chart-title">Per-ticker cumulative P&L (top 20)</div>
+            <div id="ticker-chart" class="panel-chart"></div>
+            <div class="panel-note" id="ticker-note">Cumulative P&L contribution per ticker (after slippage) — sorted by |contribution|</div>
+        </div>
+        <div class="chart-container panel-half">
+            <div class="chart-title">Model correlation — family champions</div>
+            <div id="corr-chart" class="panel-chart"></div>
+            <div class="panel-note" id="corr-note">Pearson correlation of NET daily returns. Higher = picks more similar names.</div>
+        </div>
+    </div>
+
     <div class="footer">
         Lookback: <span id="lookback">…</span> trading days · Refresh cadence: nightly cron 02:00 ET + on-demand button above · See <code>docs/markout_dashboard_spec.md</code>
     </div>
@@ -139,13 +170,13 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-refresh').addEventListener('click', loadData);
     document.getElementById('sel-model').addEventListener('change', e => {
         currentModel = e.target.value;
-        renderChart(); renderMetrics();
+        renderAll();
     });
     document.getElementById('sel-slippage').addEventListener('change', () => {
-        renderChart(); renderMetrics();
+        renderAll();
     });
     document.getElementById('sel-champion-filter').addEventListener('change', () => {
-        populateModelSelector(); renderChart(); renderMetrics();
+        populateModelSelector(); renderAll();
     });
 });
 
@@ -171,8 +202,16 @@ async function loadData() {
         `entry ±${rules.entry_threshold}, exit ±${rules.exit_threshold}, `
         + `max ${rules.max_concurrent} positions, ${rules.marking_horizon} marking`;
     populateModelSelector();
+    renderAll();
+}
+
+function renderAll() {
     renderChart();
     renderMetrics();
+    renderCalibration();
+    renderRollingIC();
+    renderTickers();
+    renderCorrelation();   // global (not per-model) — but recompute on each cycle for safety
 }
 
 // ─── Model selector ───────────────────────────────────────────────────
@@ -345,6 +384,148 @@ function renderMetrics() {
         `;
         strip.appendChild(div);
     }
+}
+
+// ─── Supporting panel: Calibration ────────────────────────────────────
+function renderCalibration() {
+    const m = currentModelObj();
+    const el = 'calib-chart';
+    if (!m || !m.calibration || !m.calibration.length) {
+        Plotly.purge(el);
+        document.getElementById('calib-note').textContent = 'No calibration data — needs more (score, return) observations.';
+        return;
+    }
+    const cal = m.calibration;
+    // Color: green if avg_return > 0, red if < 0, dim if null/zero
+    const colors = cal.map(b => {
+        if (b.avg_return_pct == null) return '#64748b';
+        return b.avg_return_pct >= 0 ? '#22c55e' : '#ef4444';
+    });
+    Plotly.react(el, [{
+        x: cal.map(b => b.bucket),
+        y: cal.map(b => b.avg_return_pct == null ? 0 : b.avg_return_pct),
+        type: 'bar',
+        marker: { color: colors },
+        text: cal.map(b => b.n > 0
+            ? `n=${b.n} hit=${b.hit_rate != null ? (b.hit_rate*100).toFixed(0)+'%' : '—'}`
+            : ''),
+        textposition: 'auto', textfont: { size: 9, color: '#0a1628' },
+        hovertemplate: 'Bucket %{x}<br>Avg ret: %{y:+.4f}%<br>%{text}<extra></extra>',
+    }], {
+        paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { family: 'DM Sans, sans-serif', color: '#e2e8f0', size: 10 },
+        margin: { l: 50, r: 20, t: 10, b: 60 },
+        xaxis: { gridcolor: '#1e3050', zerolinecolor: '#1e3050',
+                 tickangle: -45, tickfont: { size: 9 } },
+        yaxis: { gridcolor: '#1e3050', zerolinecolor: '#64748b',
+                 tickformat: '.3f', ticksuffix: '%', tickfont: { size: 10 } },
+        showlegend: false,
+    }, { displayModeBar: false, responsive: true });
+    document.getElementById('calib-note').textContent =
+        `Buckets show n + hit rate. Hit = sign(score) matches sign(return), zero-return obs excluded.`;
+}
+
+// ─── Supporting panel: Rolling 30d IC ─────────────────────────────────
+function renderRollingIC() {
+    const m = currentModelObj();
+    const el = 'rollic-chart';
+    if (!m || !m.rolling_ic_30d || !m.rolling_ic_30d.length) {
+        Plotly.purge(el);
+        return;
+    }
+    const series = m.rolling_ic_30d.filter(p => p.ic_dir != null);
+    if (!series.length) { Plotly.purge(el); return; }
+    Plotly.react(el, [{
+        x: series.map(p => p.date),
+        y: series.map(p => p.ic_dir),
+        mode: 'lines+markers', name: 'IC dir (30d trailing)',
+        line: { color: '#c8a84e', width: 2 },
+        marker: { color: '#c8a84e', size: 5 },
+        hovertemplate: '%{x}<br>IC: %{y:+.4f}<br>n=%{customdata}<extra></extra>',
+        customdata: series.map(p => p.n),
+    }], {
+        paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { family: 'DM Sans, sans-serif', color: '#e2e8f0', size: 10 },
+        margin: { l: 50, r: 20, t: 10, b: 40 },
+        xaxis: { gridcolor: '#1e3050', zerolinecolor: '#1e3050', tickfont: { size: 10 } },
+        yaxis: { gridcolor: '#1e3050', zerolinecolor: '#64748b',
+                 tickformat: '+.3f', tickfont: { size: 10 } },
+        showlegend: false,
+        shapes: [{ type: 'line', x0: 0, x1: 1, xref: 'paper',
+                    y0: 0, y1: 0, line: { color: '#64748b', width: 1, dash: 'dot' }}],
+    }, { displayModeBar: false, responsive: true });
+}
+
+// ─── Supporting panel: Per-ticker contribution heatmap ────────────────
+function renderTickers() {
+    const m = currentModelObj();
+    const el = 'ticker-chart';
+    if (!m || !m.per_ticker || !m.per_ticker.length) {
+        Plotly.purge(el);
+        document.getElementById('ticker-note').textContent = 'No ticker contribution data yet.';
+        return;
+    }
+    // Sort by cum_pnl descending; show top 20 by absolute contribution
+    const sorted = [...m.per_ticker]
+        .filter(t => t.cum_pnl != null && t.cum_pnl !== 0)
+        .sort((a, b) => Math.abs(b.cum_pnl) - Math.abs(a.cum_pnl))
+        .slice(0, 20);
+    // Re-sort by signed cum_pnl for display (top winners first, bottom losers)
+    sorted.sort((a, b) => b.cum_pnl - a.cum_pnl);
+    if (!sorted.length) { Plotly.purge(el); return; }
+    Plotly.react(el, [{
+        type: 'bar', orientation: 'h',
+        x: sorted.map(t => t.cum_pnl * 100),   // convert to %
+        y: sorted.map(t => t.ticker),
+        marker: { color: sorted.map(t => t.cum_pnl >= 0 ? '#22c55e' : '#ef4444') },
+        text: sorted.map(t =>
+            `n=${t.n_trades} L:${t.n_long}/S:${t.n_short}`),
+        textposition: 'outside', textfont: { size: 9, color: '#e2e8f0' },
+        hovertemplate: '%{y}: %{x:+.3f}% cum<br>%{text}<extra></extra>',
+    }], {
+        paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { family: 'DM Sans, sans-serif', color: '#e2e8f0', size: 10 },
+        margin: { l: 60, r: 60, t: 10, b: 30 },
+        xaxis: { gridcolor: '#1e3050', zerolinecolor: '#64748b',
+                 tickformat: '+.2f', ticksuffix: '%', tickfont: { size: 10 } },
+        yaxis: { gridcolor: '#1e3050', tickfont: { size: 10 },
+                 automargin: true },
+        showlegend: false,
+    }, { displayModeBar: false, responsive: true });
+}
+
+// ─── Supporting panel: Model correlation matrix ───────────────────────
+function renderCorrelation() {
+    const el = 'corr-chart';
+    const corr = (allData && allData.correlation) || {};
+    if (!corr.labels || corr.labels.length < 2 || !corr.matrix || !corr.matrix.length) {
+        Plotly.purge(el);
+        document.getElementById('corr-note').textContent =
+            'Correlation matrix needs ≥2 champion models with overlapping daily returns.';
+        return;
+    }
+    Plotly.react(el, [{
+        type: 'heatmap',
+        z: corr.matrix,
+        x: corr.labels, y: corr.labels,
+        zmin: -1, zmax: 1,
+        colorscale: [
+            [0, '#ef4444'], [0.4, '#1e3050'], [0.5, '#162240'],
+            [0.6, '#1e3050'], [1, '#22c55e']
+        ],
+        hovertemplate: '%{y} ↔ %{x}<br>ρ = %{z:.2f}<extra></extra>',
+        showscale: true,
+        colorbar: { thickness: 12, len: 0.8, tickfont: { size: 9, color: '#e2e8f0' }},
+    }], {
+        paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { family: 'DM Sans, sans-serif', color: '#e2e8f0', size: 9 },
+        margin: { l: 90, r: 40, t: 10, b: 90 },
+        xaxis: { tickangle: -45, tickfont: { size: 9 }, automargin: true },
+        yaxis: { tickfont: { size: 9 }, automargin: true },
+    }, { displayModeBar: false, responsive: true });
+    document.getElementById('corr-note').textContent =
+        `Pearson on NET daily returns over ${corr.n_dates || '?'} shared dates. ` +
+        `High correlation → models pick similar names.`;
 }
 </script>
 </body>

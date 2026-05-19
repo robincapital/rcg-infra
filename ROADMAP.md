@@ -1,6 +1,6 @@
 # RCG Alpha Engine — Roadmap
 
-**Last updated:** 2026-05-12 (after v18 ship)
+**Last updated:** 2026-05-19 (after v28 ship — markout dashboard)
 **How to read:** statuses are 🟢 done · 🟡 active / in flight · ⚪ pending · 🔵 blocked-on-data · 🔴 blocked-on-decision
 
 ---
@@ -21,7 +21,9 @@
 | **PT consistency audit + fix (v22)** | 🟢 | Shipped May 18 — screener was using legacy PT function. Migrated to canonical engine. Aligned dimension (ARQ), history window (3y), sector lookup, shares_diluted. GDRX now matches between Top 40 and report. |
 | **Phone PWA re-tune (v23)** | 🟢 | Shipped May 18 — mobile CSS updated for v22 layout (18-col Top 40, 5 macro chips, conviction filter, report-view) |
 | **Tier 1+2 quant signals (v24)** | 🟢 | Shipped May 18 — Hurst, Kalman, AR(2), OU half-life, BB squeeze (single-name patterns) + cross-sectional rank, sector-relative momentum, **PCA residual mean-reversion** (universe-level). 39 entrants across 12 families. |
-| Wait for new entrants + regime tags to accumulate 200+ samples each | 🔵 | ~5+ days since v17/v18 — per-family champions + regime IC should be rotating now |
+| **Stage 1 meta-blend (v26)** | 🟢 | Shipped May 18 — OLS linear blending, 45 features (39 models + 6 BBG sub-signals). Gate: ≥1000 obs AND ≥7 trading days. Weekly re-fit Monday 06:00 ET. |
+| **Daily markouts (v27)** | 🟢 | Shipped May 19 — `forward_returns_daily.py` joins predictions to SEP EOD closes at 1d/5d/20d horizons. Systemd timer 09:00 ET daily. Back-fills 90 days on first run. |
+| Wait for new entrants + regime tags to accumulate 200+ samples each | 🔵 | ~5+ days since v17/v18 — per-family champions + regime IC should be rotating now. **Stage 1 meta-blend gate needs 1 more trading day** (Monday close for 30min/60min). |
 
 ---
 
@@ -67,7 +69,7 @@ Goal: every model improves over time **without ever being cut**. Three independe
 | Item | Status | Notes |
 |---|---|---|
 | Intraday markouts (30m / 60m / 4h) | 🟢 | ~75K labeled pairs captured |
-| Daily markouts (1d / 5d / 20d) — separate process joining predictions to EOD closes from SEP | ⚪ | One systemd timer + a join script. **Target: week of May 18** |
+| Daily markouts (1d / 5d / 20d) — separate process joining predictions to EOD closes from SEP | 🟢 | **Shipped May 19 (v27)** — `forward_returns_daily.py` + systemd timer at 09:00 ET daily. Back-fills 90 days on first run. |
 | Options chain data (IV, put-call ratio) — enables vol-regime classifier expansion | ⚪ | Source TBD (Tradier, Polygon, IBKR). **Target: June** |
 | Rate curves beyond SPY/VIX/TLT — full FRED yield curve, 2s10s slope, credit spread | ⚪ | FRED API; free. **Target: June** |
 | Economic data (ISM, PMI, unemployment, CPI surprise) — regime macro context | ⚪ | FRED + BEA. **Target: June** |
@@ -101,6 +103,7 @@ Goal: every model improves over time **without ever being cut**. Three independe
 | Hyperparameter family collapse/expand | 🟢 v18 | |
 | "How to read" interpretation guide | 🟢 v16 | |
 | Mobile-responsive optimization | ⚪ | Sliders + leaderboard cramped on phone |
+| **Markout dashboard (v28)** — trade-first model eval at `/markouts.html` | 🟢 | Shipped May 19. Headline P&L curve (gross + net at toggleable 0/5/10 bps slippage), drawdown chart, metrics strip + 4 supporting panels: calibration buckets, rolling 30d IC, per-ticker contribution, model correlation matrix. RTH-filtered, hysteresis trade rules (entry ±60 / exit ±35), max 15 concurrent, equal-weight, long/short. Nightly cron 06:00 UTC. See `docs/markout_dashboard_spec.md`. |
 | Historical backtest UI — pick a date, see what the dashboard looked like then + realized P&L if you'd traded the top-N | ⚪ | After Phase B daily markouts |
 
 ---
