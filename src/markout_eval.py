@@ -47,11 +47,32 @@ from __future__ import annotations
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, time
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, "/home/nixos/Prod/V1/src")
 import psycopg
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Trading-hours filter (NYSE regular session: 9:30 ET → 16:00 ET, Mon-Fri)
+# Uses zoneinfo so DST transitions are handled correctly (EST in winter,
+# EDT in summer). Holiday calendar deferred to v2 — for now any weekday
+# bucket within 9:30-16:00 ET is considered tradeable.
+# ────────────────────────────────────────────────────────────────────────
+ET = ZoneInfo("America/New_York")
+RTH_OPEN  = time(9, 30)
+RTH_CLOSE = time(16, 0)
+
+
+def is_rth(dt_utc: datetime) -> bool:
+    """True if dt_utc falls within 9:30-16:00 ET on a weekday."""
+    dt_et = dt_utc.astimezone(ET)
+    if dt_et.weekday() >= 5:   # Sat=5, Sun=6
+        return False
+    t = dt_et.time()
+    return RTH_OPEN <= t < RTH_CLOSE
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -89,6 +110,7 @@ class Position:
     entry_time:    datetime
     entry_score:   float
     weight:        float = 0.0         # set on entry, re-set on rebalance
+    fires_held:    int   = 0           # incremented each fire the position survives
 
 
 @dataclass
@@ -111,6 +133,7 @@ class SimResult:
     n_open_at_end:            int       # positions still open when simulation ended
     n_long:                   int       # completed long round-trips
     n_short:                  int       # completed short round-trips
+    avg_hold_trading_minutes: float     # mean fires_held × 30 across all round-trips
     daily_equity_gross:       dict      # date → equity (start=1.0)
     daily_equity_net:         dict      # date → equity after costs
     daily_returns_gross:      dict      # date → daily % return
@@ -174,9 +197,14 @@ def _pull_fires(
     with psycopg.connect(DB_DSN) as conn, conn.cursor() as cur:
         cur.execute(sql, tuple(params))
         for bucket_time, ticker, sname, val in cur.fetchall():
+            # Drop anything outside 9:30 ET → 16:00 ET on weekdays. The
+            # tournament shouldn't be firing outside RTH anyway, but
+            # we filter defensively so the simulation never marks or
+            # trades on pre-market / after-hours / weekend data.
+            if not is_rth(bucket_time):
+                continue
             v = float(val)
             if sname == score_signal:
-                # If multiple runs land in the same bucket (rare), last-write-wins
                 scores_by_bucket[bucket_time][ticker] = v
             elif sname == r30_signal:
                 r30_by_bucket[bucket_time][ticker] = v
@@ -228,7 +256,8 @@ def simulate(
     per_ticker_pnl: dict              = defaultdict(lambda: {
         "n_trades": 0, "cum_pnl": 0.0, "n_long": 0, "n_short": 0
     })
-    hold_durations: list[float]       = []   # minutes per round-trip
+    hold_durations: list[float]       = []   # wall-clock minutes per round-trip (incl. overnight)
+    hold_trading_mins: list[float]    = []   # trading minutes per round-trip (fires_held × 30)
     round_trip_pnls: list[float]      = []   # P&L per round-trip (for hit rate)
     open_trip_pnl:  dict              = {}   # ticker → running P&L for current trip
     open_trip_entry: dict             = {}   # ticker → entry bucket_time
@@ -249,6 +278,7 @@ def simulate(
         if prev_bucket is not None:
             r30_prev = r30_by_bucket.get(prev_bucket, {})
             for ticker, pos in list(positions.items()):
+                pos.fires_held += 1   # one more fire of holding (RTH-only)
                 r30 = r30_prev.get(ticker)
                 if r30 is None:
                     continue
@@ -271,6 +301,7 @@ def simulate(
                 round_trip_pnls.append(open_trip_pnl.pop(ticker, 0.0))
                 entry_ts = open_trip_entry.pop(ticker, fire_time)
                 hold_durations.append((fire_time - entry_ts).total_seconds() / 60.0)
+                hold_trading_mins.append(pos.fires_held * 30.0)
                 trade_log.append(TradeEvent(
                     fire_time=fire_time, ticker=ticker, event="EXIT",
                     direction=pos.direction, score=score, weight=pos.weight))
@@ -341,6 +372,7 @@ def simulate(
             round_trip_pnls.append(open_trip_pnl.pop(ticker, 0.0))
             entry_ts = open_trip_entry.pop(ticker, prev_bucket)
             hold_durations.append((prev_bucket - entry_ts).total_seconds() / 60.0)
+            hold_trading_mins.append(pos.fires_held * 30.0)
             trade_log.append(TradeEvent(
                 fire_time=prev_bucket, ticker=ticker, event="EXIT_FORCED",
                 direction=pos.direction, score=0.0, weight=pos.weight))
@@ -377,6 +409,8 @@ def simulate(
                 / len(round_trip_pnls)) if round_trip_pnls else 0.0
     avg_hold = (sum(hold_durations) / len(hold_durations)
                 if hold_durations else 0.0)
+    avg_hold_trading = (sum(hold_trading_mins) / len(hold_trading_mins)
+                        if hold_trading_mins else 0.0)
     # Count COMPLETED round-trips by direction — pair each EXIT/EXIT_FORCED
     # event with its preceding ENTRY for the same ticker.
     n_long_completed = 0; n_short_completed = 0
@@ -401,9 +435,194 @@ def simulate(
         cum_return_gross=cum_gross, cum_return_net=cum_net,
         sharpe_net=sharpe_net, max_dd_net=max_dd_net,
         hit_rate=hit_rate, avg_hold_minutes=avg_hold,
+        avg_hold_trading_minutes=avg_hold_trading,
         trade_log=trade_log,
         per_ticker_contribution=dict(per_ticker_pnl),
     )
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Day 2 — Supporting-panel data (calibration, rolling IC, daily-return
+# series for cross-model correlation matrix)
+# ────────────────────────────────────────────────────────────────────────
+def compute_calibration(
+    model_name:   str,
+    horizon:      str,
+    cutoff_days:  Optional[int] = None,
+    cutoff_end:   Optional[datetime] = None,
+) -> list[dict]:
+    """
+    For each score bucket, compute avg realized return + sample size.
+
+    Buckets are signed: positive side covers longs (60-70, 70-80, 80-90,
+    90-100) and negative side covers shorts (-70 to -60, -80 to -70, etc.).
+    Sub-threshold bins (35-60 / -60 to -35) and dead-zone (-35 to +35) are
+    also included for visibility into how the model behaves below the
+    trading thresholds.
+
+    Buckets are pulled from the same fires the trade-simulation uses
+    (RTH-filtered), so the calibration plot reflects the same population
+    the strategy was trained on.
+
+    Returns: list of {bucket_label, lo, hi, n, avg_return_pct, hit_rate}
+             ordered low → high.
+    """
+    scores_by_bucket, r30_by_bucket = _pull_fires(
+        model_name, horizon, cutoff_days, cutoff_end)
+    # Collect (score, r30) pairs paired by (bucket, ticker)
+    pairs: list[tuple[float, float]] = []
+    for bt, scores in scores_by_bucket.items():
+        r30s = r30_by_bucket.get(bt, {})
+        for ticker, s in scores.items():
+            r = r30s.get(ticker)
+            if r is not None:
+                pairs.append((s, r))
+    if not pairs:
+        return []
+
+    # Bucket edges — symmetric around 0
+    edges = [-100, -90, -80, -70, -60, -35, 0, 35, 60, 70, 80, 90, 100.01]
+    labels = ["-90/-100", "-80/-90", "-70/-80", "-60/-70",
+              "-35/-60",  "-35/0",   "0/35",    "35/60",
+              "60/70",    "70/80",   "80/90",   "90/100"]
+    buckets: list[dict] = []
+    for i in range(len(edges) - 1):
+        lo, hi = edges[i], edges[i+1]
+        in_bucket = [(s, r) for s, r in pairs if lo <= s < hi]
+        if not in_bucket:
+            buckets.append({
+                "bucket": labels[i], "lo": lo, "hi": hi,
+                "n": 0, "avg_return_pct": None, "hit_rate": None,
+            })
+            continue
+        n = len(in_bucket)
+        avg_r = sum(r for _, r in in_bucket) / n
+        # Hit rate: among observations with a NON-ZERO return, fraction
+        # where sign(score) == sign(return). Zero-return observations are
+        # excluded from the denominator — they're "no movement", neither
+        # hit nor miss. This matches the convention models_leaderboard
+        # uses (n_strong gate on signal magnitude, signed product on
+        # return sign).
+        non_zero = [(s, r) for s, r in in_bucket if r != 0]
+        if non_zero:
+            hits = sum(1 for s, r in non_zero if (s > 0) == (r > 0))
+            hit_rate = hits / len(non_zero)
+        else:
+            hit_rate = None
+        buckets.append({
+            "bucket": labels[i], "lo": lo, "hi": hi,
+            "n": n, "n_nonzero_returns": len(non_zero),
+            "avg_return_pct": round(avg_r, 4),
+            "hit_rate": round(hit_rate, 4) if hit_rate is not None else None,
+        })
+    return buckets
+
+
+def compute_rolling_ic(
+    model_name:   str,
+    horizon:      str,
+    window_days:  int = 30,
+    cutoff_days:  Optional[int] = None,
+    cutoff_end:   Optional[datetime] = None,
+) -> list[dict]:
+    """
+    Rolling directional IC over a `window_days`-trailing window, sampled
+    at the end of each trading day.
+
+    Directional IC = mean(sign(score) × sign(realized_return)) — same as
+    models_leaderboard.py uses, so the value is comparable to the
+    leaderboard's overall IC.
+
+    Returns: list of {date, ic_dir, n} ordered by date.
+    """
+    scores_by_bucket, r30_by_bucket = _pull_fires(
+        model_name, horizon, cutoff_days, cutoff_end)
+
+    # Flatten into a timestamp-sorted list of (date, score, r30) triples
+    triples: list[tuple[date, float, float]] = []
+    for bt, scores in scores_by_bucket.items():
+        r30s = r30_by_bucket.get(bt, {})
+        for ticker, s in scores.items():
+            r = r30s.get(ticker)
+            if r is not None:
+                # Use the ET date so windowing is RTH-aware
+                triples.append((bt.astimezone(ET).date(), s, r))
+    if not triples:
+        return []
+    triples.sort(key=lambda t: t[0])
+
+    # For each unique trading day, compute trailing-window IC
+    unique_dates = sorted({t[0] for t in triples})
+    rolling: list[dict] = []
+    from collections import deque
+    # Build a deque of (date, score, r) we walk through
+    triple_idx = 0
+    window: list[tuple[date, float, float]] = []
+    for d in unique_dates:
+        # Add all triples up to and including d
+        while triple_idx < len(triples) and triples[triple_idx][0] <= d:
+            window.append(triples[triple_idx])
+            triple_idx += 1
+        # Trim window to N trailing trading days
+        cutoff_date = d
+        # Find trading days within window: collect distinct dates ≤ d, take last N
+        seen_dates: list[date] = []
+        for td, _, _ in reversed(window):
+            if not seen_dates or seen_dates[-1] != td:
+                seen_dates.append(td)
+            if len(seen_dates) >= window_days:
+                break
+        if seen_dates:
+            min_date = seen_dates[-1]
+            window = [t for t in window if t[0] >= min_date]
+        # Compute IC on the current window
+        if len(window) < 5:
+            rolling.append({"date": str(d), "ic_dir": None, "n": len(window)})
+            continue
+        ic_terms = [
+            (1 if s > 0 else -1 if s < 0 else 0)
+            * (1 if r > 0 else -1 if r < 0 else 0)
+            for _, s, r in window
+        ]
+        ic = sum(ic_terms) / len(ic_terms)
+        rolling.append({"date": str(d), "ic_dir": round(ic, 4), "n": len(window)})
+    return rolling
+
+
+def compute_model_correlation(
+    sim_results: list[SimResult],
+) -> dict:
+    """
+    Compute pairwise Pearson correlation of daily NET returns across a
+    set of already-simulated models.
+
+    sim_results: list of SimResult — typically the family champions only
+                 (passed in by the publisher script).
+    Returns: {labels: [...], matrix: [[1.0, 0.42, ...], ...]}
+    """
+    if len(sim_results) < 2:
+        return {"labels": [r.model_name for r in sim_results], "matrix": []}
+
+    labels = [r.model_name for r in sim_results]
+    # Union of all dates across all results
+    all_dates = sorted({d for r in sim_results for d in r.daily_returns_net})
+    # Build matrix: row per model, col per date
+    n = len(sim_results)
+    cols = [[r.daily_returns_net.get(d, 0.0) for d in all_dates]
+            for r in sim_results]
+
+    def pearson(x: list[float], y: list[float]) -> float:
+        if len(x) < 2: return 0.0
+        mx = sum(x) / len(x); my = sum(y) / len(y)
+        sx2 = sum((a - mx) ** 2 for a in x)
+        sy2 = sum((b - my) ** 2 for b in y)
+        sxy = sum((a - mx) * (b - my) for a, b in zip(x, y))
+        denom = (sx2 * sy2) ** 0.5
+        return sxy / denom if denom > 1e-9 else 0.0
+
+    matrix = [[round(pearson(cols[i], cols[j]), 3) for j in range(n)]
+              for i in range(n)]
+    return {"labels": labels, "matrix": matrix, "n_dates": len(all_dates)}
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -442,7 +661,7 @@ def _empty_result(model_name: str, horizon: str, slippage_bps: float) -> SimResu
         daily_returns_gross={}, daily_returns_net={},
         cum_return_gross=0.0, cum_return_net=0.0,
         sharpe_net=0.0, max_dd_net=0.0,
-        hit_rate=0.0, avg_hold_minutes=0.0,
+        hit_rate=0.0, avg_hold_minutes=0.0, avg_hold_trading_minutes=0.0,
         trade_log=[], per_ticker_contribution={},
     )
 
@@ -456,7 +675,7 @@ def _print_summary(r: SimResult) -> None:
     print(f"  Completed round-trips: {r.n_trades}  (long={r.n_long}, short={r.n_short})  "
           f"+ {r.n_open_at_end} force-closed at sim end")
     print(f"  Hit rate (round-trips ITM): {r.hit_rate * 100:.1f}%")
-    print(f"  Avg hold: {r.avg_hold_minutes:.0f} min")
+    print(f"  Avg hold (trading-min): {r.avg_hold_trading_minutes:.0f}  ({r.avg_hold_trading_minutes/60:.1f}h)")
     print(f"  Cumulative return  GROSS: {r.cum_return_gross * 100:+.2f}%   NET: {r.cum_return_net * 100:+.2f}%")
     print(f"  Sharpe (net):       {r.sharpe_net:+.2f}")
     print(f"  Max DD (net):       {r.max_dd_net * 100:+.2f}%")
@@ -468,9 +687,6 @@ def _print_summary(r: SimResult) -> None:
 
 
 if __name__ == "__main__":
-    # Smoke test: run against an established entrant we know has data.
-    # Use momentum_120_60min (long-running, plenty of fires) as the canary.
-    # When meta_blend_60min has data we'll run that too.
     # Real signal names from the DB (`model_<stem>_score`). Pick a few that
     # span different families so we see varied behavior in the smoke test.
     smoke_models = [
@@ -481,13 +697,58 @@ if __name__ == "__main__":
         ("mean_rev_20",            "60min"),
     ]
     print("=" * 70)
-    print("markout_eval.py — Day 1 smoke test")
+    print("markout_eval.py — Day 1+2 smoke test")
     print("=" * 70)
+    sim_results: list[SimResult] = []
     for name, hz in smoke_models:
         try:
             result = simulate(name, hz, slippage_bps=5.0, cutoff_days=30)
             _print_summary(result)
+            sim_results.append(result)
         except Exception as e:
             print(f"\n  {name}: FAILED — {type(e).__name__}: {e}")
+
     print("\n" + "=" * 70)
-    print("Day 1 done.")
+    print("Day 2 — supporting-panel data")
+    print("=" * 70)
+
+    # 1. Calibration buckets for a non-trivial model
+    print("\n[1/3] Calibration (bollinger_pos_20):")
+    buckets = compute_calibration("bollinger_pos_20", "60min", cutoff_days=30)
+    print(f"  {'bucket':>10s}  {'n':>5s}  {'avg_return_%':>12s}  {'hit_rate':>9s}")
+    for b in buckets:
+        if b["n"] == 0:
+            print(f"  {b['bucket']:>10s}  {b['n']:>5d}  {'—':>12s}  {'—':>9s}")
+        else:
+            print(f"  {b['bucket']:>10s}  {b['n']:>5d}  "
+                  f"{b['avg_return_pct']:>+12.4f}  {b['hit_rate']*100:>8.1f}%")
+
+    # 2. Rolling 30d IC time-series
+    print("\n[2/3] Rolling 30d IC (bollinger_pos_20):")
+    rolling = compute_rolling_ic("bollinger_pos_20", "60min",
+                                  window_days=30, cutoff_days=30)
+    for r in rolling[-7:]:    # last week of points
+        if r["ic_dir"] is None:
+            print(f"  {r['date']}  n={r['n']:>4d}  ic_dir=  —")
+        else:
+            print(f"  {r['date']}  n={r['n']:>4d}  ic_dir={r['ic_dir']:+.4f}")
+
+    # 3. Model correlation matrix across our smoke models
+    print("\n[3/3] Model-vs-model correlation (NET daily returns):")
+    if len(sim_results) >= 2:
+        corr = compute_model_correlation([r for r in sim_results if r.n_trades > 0])
+        labels = corr["labels"]
+        print(f"  ({len(labels)} models, {corr.get('n_dates', 0)} dates)")
+        # Print compact triangle
+        print(f"  {'':25s}", end="");
+        for j, lbl in enumerate(labels):
+            print(f" {j:>5d}", end="")
+        print()
+        for i, lbl in enumerate(labels):
+            print(f"  {i}: {lbl:<22s}", end="")
+            for j in range(len(labels)):
+                print(f" {corr['matrix'][i][j]:>+5.2f}", end="")
+            print()
+
+    print("\n" + "=" * 70)
+    print("Day 2 done.")
