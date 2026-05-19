@@ -853,6 +853,11 @@ def build_report(ticker: str) -> dict:
         return {"ticker": ticker, "error": pt_payload["error"]}
 
     f = fetch_fundamentals(ticker) or {}
+
+    # v29.1 — Build the Key Stats data box payload (52w range, ADV, div
+    # yield, shares out, yearly EPS) + Haiku-generated company description.
+    # These show on the in-browser report panel (trade.html "📄 button").
+    data_box, yearly_eps, description = _build_data_box(ticker, f)
     pt_block = pt_payload.get("pt_with_overrides") or pt_payload.get("pt_engine_default") or {}
     sector = (pt_block.get("breakdown") or {}).get("sector")
     trailing = _build_trailing_series_view(f)
@@ -888,6 +893,13 @@ def build_report(ticker: str) -> dict:
                 cur[ticker] = rec
                 save_assumptions(cur)
 
+    # v29.1 — Model driver convenience field (which of the 4-5 models drove
+    # the final PT). Surfaces in the trade.html report panel without
+    # making the user dig through the breakdown JSON.
+    breakdown = pt_block.get("breakdown") or {}
+    model_driver = breakdown.get("dominant_model") or "?"
+    weights = breakdown.get("conviction_weights") or {}
+
     return {
         "ticker":         ticker,
         "rubric":         rubric,
@@ -897,14 +909,205 @@ def build_report(ticker: str) -> dict:
         "trailing":       trailing,         # 8q series + derived margins
         "sector_comp":    sector_comp,      # effective vs anchor multiples
         "catalysts":      catalysts,        # news headlines + analyst targets
+        "description":    description,      # v29.1 — 1-sentence Haiku-generated blurb
+        "data_box":       data_box,         # v29.1 — 52w range, mkt cap, shares, ADV, div yield
+        "yearly_eps":     yearly_eps,       # v29.1 — last 3 fiscal years
+        "model_driver":   {                 # v29.1 — dominant model + weights
+            "dominant":   model_driver,
+            "weights":    weights,
+        },
         "company_info":   {
             "marketcap":   f.get("marketcap"),
             "cash_on_hand": f.get("cash_on_hand"),
             "n_quarters":  f.get("n_quarters"),
             "latest_datekey": f.get("latest_datekey"),
+            "sector":      f.get("sector"),
+            "industry":    f.get("industry"),
+            "company_name": f.get("company_name"),
         },
         "generated_at":   datetime.now(timezone.utc).isoformat(),
     }
+
+
+# ─── v29.1 — Inline Haiku description (independent of rcg_report.py) ────
+def _generate_description_inline(ticker: str, fundamentals: dict) -> Optional[str]:
+    """Generate a 1-sentence company description via Anthropic Haiku.
+    Cached at the shared path so subsequent calls (and the rcg_report.py
+    PDF generator) hit the cache."""
+    desc_cache_path = Path("/home/nixos/Prod/V1/data/ticker_descriptions.json")
+    api_key_path = Path.home() / ".anthropic_api_key"
+    if not api_key_path.exists():
+        return None
+    try:
+        api_key = api_key_path.read_text().strip()
+        company_name = fundamentals.get("company_name") or ticker
+        sector       = fundamentals.get("sector") or "unknown"
+        industry     = fundamentals.get("industry") or "unknown"
+        prompt = (
+            f"Write one factual sentence (max 25 words) describing what "
+            f"{company_name} ({ticker}) does — their core product or service. "
+            f"No filler like 'the company' or 'a leading'. Just facts. "
+            f"Sector: {sector}. Industry: {industry}.\n\n"
+            f"If you don't know this company specifically, output exactly: UNKNOWN"
+        )
+        import urllib.request as _u
+        req = _u.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=json.dumps({
+                "model": "claude-haiku-4-5",
+                "max_tokens": 100,
+                "messages": [{"role": "user", "content": prompt}],
+            }).encode(),
+            headers={
+                "x-api-key":         api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type":      "application/json",
+            },
+        )
+        with _u.urlopen(req, timeout=10) as resp:
+            d = json.loads(resp.read())
+        text = ""
+        for block in d.get("content", []) or []:
+            if block.get("type") == "text":
+                text += block.get("text", "")
+        text = text.strip().strip('"').strip()
+        if not text or "UNKNOWN" in text.upper():
+            return None
+        text = text[:200]
+        # Update shared cache
+        try:
+            cache = {}
+            if desc_cache_path.exists():
+                cache = json.loads(desc_cache_path.read_text())
+            cache[ticker.upper()] = {
+                "desc":         text,
+                "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                "name_at_gen":  company_name,
+                "manual":       False,
+            }
+            desc_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            desc_cache_path.write_text(json.dumps(cache, indent=2, sort_keys=True))
+        except Exception as e:
+            print(f"  [WARN] desc cache write failed: {e}")
+        return text
+    except Exception as e:
+        print(f"  [WARN] Haiku inline description failed: {type(e).__name__}: {e}")
+        return None
+
+
+# ─── v29.1 — Data box + description builder ─────────────────────────────
+def _build_data_box(ticker: str, fundamentals: dict) -> tuple[dict, list, str]:
+    """Compute the Key Stats panel + 3-FY EPS history + 1-sentence company
+    description for the /report endpoint. Returns (data_box, yearly_eps, desc).
+
+    Description is Haiku-generated, cached at data/ticker_descriptions.json.
+    Falls back to sector/industry label when Haiku unreachable.
+    """
+    import sys
+    sys.path.insert(0, "/home/nixos/Prod/V1/src")
+    description = ""
+    yearly_eps = []
+    data_box = {
+        "symbol":         ticker.upper(),
+        "lo_52":          None,
+        "hi_52":          None,
+        "marketcap":      fundamentals.get("marketcap"),
+        "shares_out":     fundamentals.get("shares_diluted"),
+        "adv_usd":        None,
+        "div_yield_pct":  None,
+    }
+
+    # ── Description from shared cache (rcg_report.py writes it; we read it).
+    # Don't import rcg_report — it pulls reportlab+numpy+scipy which aren't
+    # in venv-rcg-prod. Just read the JSON cache directly.
+    try:
+        desc_cache_path = Path("/home/nixos/Prod/V1/data/ticker_descriptions.json")
+        if desc_cache_path.exists():
+            cache = json.loads(desc_cache_path.read_text())
+            entry = cache.get(ticker.upper()) or {}
+            description = entry.get("desc") or ""
+    except Exception as e:
+        print(f"  [WARN] description load failed for {ticker}: {e}")
+
+    # If no cached description, generate via Haiku inline + cache for next time.
+    # Best-effort — stays empty if Haiku unreachable.
+    if not description:
+        description = _generate_description_inline(ticker, fundamentals) or ""
+
+    # ── 52-week range + ADV from SEP ──
+    try:
+        import polars as pl
+        sep_path = Path("/var/sharadar/data/SEP.parquet")
+        if sep_path.exists():
+            sep = pl.scan_parquet(sep_path).rename({c: c.lower() for c in pl.scan_parquet(sep_path).collect_schema().names()})
+            from datetime import datetime as _dt, timedelta as _td
+            cutoff_52w = _dt.now().date() - _td(days=365)
+            cutoff_20d = _dt.now().date() - _td(days=30)
+            recent = sep.filter(
+                (pl.col("ticker") == ticker.upper()) & (pl.col("date") >= cutoff_52w)
+            ).collect()
+            if recent.height > 0:
+                px_col = "closeunadj" if "closeunadj" in recent.columns else "close"
+                closes = recent[px_col].to_numpy()
+                hi = float(closes.max()) if len(closes) else None
+                lo = float(closes.min()) if len(closes) else None
+                data_box["hi_52"] = round(hi, 2) if hi else None
+                data_box["lo_52"] = round(lo, 2) if lo else None
+                # ADV from trailing 20 sessions (dollar volume)
+                if "volume" in recent.columns:
+                    tail = recent.sort("date").tail(20)
+                    if tail.height > 0:
+                        vols = tail["volume"].to_numpy()
+                        cls  = tail[px_col].to_numpy()
+                        adv = float((vols * cls).mean())
+                        data_box["adv_usd"] = round(adv, 0) if adv else None
+    except Exception as e:
+        print(f"  [WARN] 52w/ADV load failed for {ticker}: {e}")
+
+    # ── Dividend yield + yearly EPS from SF1 ──
+    try:
+        import polars as pl
+        sf1_path = Path("/var/sharadar/data/SF1.parquet")
+        if sf1_path.exists():
+            sf1 = pl.read_parquet(sf1_path)
+            sf1 = sf1.rename({c: c.lower() for c in sf1.columns})
+
+            # Dividend yield: latest non-null from ARQ. Sanity cap at 15%
+            # — Sharadar sometimes has bad placeholder values (VISN at 156%,
+            # WULF at 431%). Real common-stock yields don't exceed ~12-15%
+            # even for distressed BDCs/MLPs. Above that, treat as bad data.
+            arq = sf1.filter(
+                (pl.col("ticker") == ticker.upper()) & (pl.col("dimension") == "ARQ")
+            ).sort("datekey")
+            if "divyield" in arq.columns and arq.height > 0:
+                for v in reversed(arq["divyield"].to_list()):
+                    if v is None: continue
+                    pct = float(v) * 100
+                    if pct > 0 and pct <= 15.0:   # plausible yield
+                        data_box["div_yield_pct"] = round(pct, 2)
+                        break
+
+            # Yearly EPS — last 3 FYs from ARY
+            ary = sf1.filter(
+                (pl.col("ticker") == ticker.upper()) & (pl.col("dimension") == "ARY")
+            ).sort("datekey").tail(3)
+            if ary.height > 0:
+                eps_col = ("epsdil" if "epsdil" in ary.columns
+                            else ("eps" if "eps" in ary.columns else None))
+                if eps_col:
+                    eps_vals = ary[eps_col].to_list()
+                    date_col = "datekey" if "datekey" in ary.columns else "calendardate"
+                    dates = ary[date_col].to_list()
+                    for d, e in zip(dates, eps_vals):
+                        try:
+                            ef = float(e) if e is not None else None
+                        except Exception:
+                            ef = None
+                        yearly_eps.append({"fy": str(d)[:4] if d else "?", "eps": ef})
+    except Exception as e:
+        print(f"  [WARN] divyield/EPS load failed for {ticker}: {e}")
+
+    return data_box, yearly_eps, description
 
 
 # ─── HTTP handler ──────────────────────────────────────────────────────────

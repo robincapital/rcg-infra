@@ -1255,6 +1255,11 @@
     const ci      = rep.company_info || {};
     const tr      = rep.trailing || {};
     const sc      = rep.sector_comp || {};
+    // v29.1 — Key Stats data box + description + EPS history + model driver
+    const desc    = rep.description || '';
+    const db      = rep.data_box || {};
+    const epsHist = rep.yearly_eps || [];
+    const driver  = rep.model_driver || {};
     const summary = rep.summary || (
       rep.summary_src === 'none'
         ? `Narrative summary unavailable — set ANTHROPIC_API_KEY on the server to enable Claude Haiku 4.5 narration. The deterministic rating + drivers below remain the authoritative content of this report.`
@@ -1379,7 +1384,62 @@
         <div class="right">
           <div class="tkr">${t}</div>
           <div class="sect">${sector}</div>
-          <div class="name">Mkt cap ${fmtMoneyShort(ci.marketcap)} &nbsp;·&nbsp; ${ci.n_quarters || '?'}q SF1 history</div>
+          <div class="name">${ci.company_name || ''}</div>
+        </div>
+      </div>
+
+      <!-- v29.1 Company overview: description + data box + EPS history + model driver -->
+      ${desc ? `
+        <div style="background:var(--rcg-navy-light);border-left:3px solid var(--rcg-gold);
+                    padding:8px 14px;border-radius:3px;margin:8px 0;
+                    font-size:11.5px;font-style:italic;color:var(--rcg-text);line-height:1.5;">
+          ${desc}
+        </div>
+      ` : ''}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+        <!-- Key Stats data box -->
+        <div style="background:var(--rcg-navy-light);border:1px solid var(--rcg-border);
+                    border-radius:3px;padding:8px 12px;font-size:10.5px;">
+          <div style="color:var(--rcg-gold);font-size:9.5px;text-transform:uppercase;
+                       letter-spacing:0.8px;margin-bottom:5px;border-bottom:1px solid var(--rcg-border);
+                       padding-bottom:3px;">Key Stats</div>
+          <table style="width:100%;border-collapse:collapse;font-family:var(--mono);">
+            <tr><td style="color:var(--rcg-text-dim);padding:1.5px 0;">Symbol</td>
+                <td style="text-align:right;font-weight:600;">${db.symbol || t}</td></tr>
+            <tr><td style="color:var(--rcg-text-dim);padding:1.5px 0;">52-wk Range</td>
+                <td style="text-align:right;">${db.lo_52 != null && db.hi_52 != null ? `$${db.lo_52.toFixed(2)} – $${db.hi_52.toFixed(2)}` : '—'}</td></tr>
+            <tr><td style="color:var(--rcg-text-dim);padding:1.5px 0;">Market Cap</td>
+                <td style="text-align:right;">${fmtMoneyShort(db.marketcap)}</td></tr>
+            <tr><td style="color:var(--rcg-text-dim);padding:1.5px 0;">Shares Out.</td>
+                <td style="text-align:right;">${db.shares_out != null ? (db.shares_out/1e6).toFixed(1) + 'M' : '—'}</td></tr>
+            <tr><td style="color:var(--rcg-text-dim);padding:1.5px 0;">Avg Daily Vol ($)</td>
+                <td style="text-align:right;">${db.adv_usd != null ? fmtMoneyShort(db.adv_usd) : '—'}</td></tr>
+            ${db.div_yield_pct != null ? `
+              <tr><td style="color:var(--rcg-text-dim);padding:1.5px 0;">Dividend Yield</td>
+                  <td style="text-align:right;color:var(--rcg-gold);">${db.div_yield_pct.toFixed(2)}%</td></tr>
+            ` : ''}
+          </table>
+        </div>
+        <!-- Yearly EPS + model driver -->
+        <div style="background:var(--rcg-navy-light);border:1px solid var(--rcg-border);
+                    border-radius:3px;padding:8px 12px;font-size:10.5px;">
+          <div style="color:var(--rcg-gold);font-size:9.5px;text-transform:uppercase;
+                       letter-spacing:0.8px;margin-bottom:5px;border-bottom:1px solid var(--rcg-border);
+                       padding-bottom:3px;">EPS (last 3 FY) &nbsp;·&nbsp; Model Driver</div>
+          <table style="width:100%;border-collapse:collapse;font-family:var(--mono);">
+            ${epsHist.length > 0 ? epsHist.map(e => `
+              <tr><td style="color:var(--rcg-text-dim);padding:1.5px 0;">FY${e.fy}</td>
+                  <td style="text-align:right;color:${e.eps != null && e.eps > 0 ? 'var(--rcg-green)' : (e.eps != null && e.eps < 0 ? 'var(--rcg-red)' : 'var(--rcg-text)')};font-weight:600;">${e.eps != null ? '$' + e.eps.toFixed(2) : 'N/A'}</td></tr>
+            `).join('') : '<tr><td colspan="2" style="color:var(--rcg-text-dim);padding:3px 0;">No yearly EPS data</td></tr>'}
+            <tr><td colspan="2" style="padding-top:6px;border-top:1px solid var(--rcg-border);"></td></tr>
+            <tr><td style="color:var(--rcg-text-dim);padding:2px 0;">Dominant model</td>
+                <td style="text-align:right;font-weight:700;color:var(--rcg-gold);text-transform:uppercase;">${(driver.dominant || '?').replace(/_/g,' ')}</td></tr>
+            ${Object.keys(driver.weights || {}).length > 0 ? `
+              <tr><td colspan="2" style="font-size:9.5px;color:var(--rcg-text-dim);padding-top:2px;line-height:1.4;">
+                Weights: ${Object.entries(driver.weights || {}).filter(([k,v]) => v > 0.001).map(([k,v]) => `${k}=${(v*100).toFixed(0)}%`).join(' &nbsp;·&nbsp; ')}
+              </td></tr>
+            ` : ''}
+          </table>
         </div>
       </div>
       ${isFallbackRating(rep) ? `
