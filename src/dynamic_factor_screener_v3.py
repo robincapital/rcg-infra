@@ -42,6 +42,23 @@ warnings.filterwarnings('ignore')
 sys.path.insert(0, "/home/nixos/Prod/V1/src")
 from price_targets import compute_target_price as _canon_pt
 
+
+# v28.8 — Cached loader for user_assumptions.json so the screener can
+# pick up MM-set growth overrides + TAM model inputs per ticker without
+# re-reading the file for each of the 800 names.
+_user_assumptions_cache = None
+def _load_user_assumptions_cached():
+    global _user_assumptions_cache
+    if _user_assumptions_cache is None:
+        try:
+            import json as _json
+            p = Path("/home/nixos/Prod/V1/src/user_assumptions.json")
+            _user_assumptions_cache = _json.loads(p.read_text()) if p.exists() else {}
+        except Exception as e:
+            print(f"  [WARN] could not load user_assumptions: {e}")
+            _user_assumptions_cache = {}
+    return _user_assumptions_cache
+
 # ============================================================
 # ── USER INPUTS  (edit these before each run) ───────────────
 # ============================================================
@@ -1256,19 +1273,48 @@ def screen_stocks(sf1, equity_prices, adr_tickers=None, biotech_tickers=None,
     )
     eligible_tickers = latest["ticker"].to_list()
 
+    # v28.8 — MM-pinned + TAM-tagged tickers bypass the ADR/biotech
+    # filters. MM has explicitly opted these in (either by starring on
+    # the dashboard or by entering a TAM value); we always want them
+    # scored and visible.
+    must_keep = set()
+    try:
+        import json as _bypass_json
+        pinned_path_bypass = Path("/home/nixos/Prod/V1/src/user_pinned.json")
+        if pinned_path_bypass.exists():
+            must_keep.update(
+                t.upper() for t in (_bypass_json.loads(pinned_path_bypass.read_text()).get("pinned") or [])
+            )
+        ua_bypass = _load_user_assumptions_cached()
+        for t, rec in (ua_bypass or {}).items():
+            tam_b = (rec.get("tam") or {})
+            if tam_b.get("tam_usd_billions"):
+                must_keep.add(t.upper())
+    except Exception as _ee:
+        print(f"  [WARN] bypass list build failed: {_ee}")
+
     if adr_tickers:
         before = len(eligible_tickers)
-        eligible_tickers = [t for t in eligible_tickers if t not in adr_tickers]
+        eligible_tickers = [t for t in eligible_tickers
+                             if (t not in adr_tickers) or (t.upper() in must_keep)]
         excluded = before - len(eligible_tickers)
         if excluded > 0:
             print(f"  {excluded} ADRs excluded from screen")
 
     if biotech_tickers:
         before = len(eligible_tickers)
-        eligible_tickers = [t for t in eligible_tickers if t not in biotech_tickers]
+        eligible_tickers = [t for t in eligible_tickers
+                             if (t not in biotech_tickers) or (t.upper() in must_keep)]
         excluded = before - len(eligible_tickers)
         if excluded > 0:
             print(f"  {excluded} biotech/pharma tickers excluded from screen")
+
+    # Surface what got bypassed for visibility
+    bypassed = [t for t in eligible_tickers
+                if (t in (adr_tickers or set()) or t in (biotech_tickers or set()))
+                and t.upper() in must_keep]
+    if bypassed:
+        print(f"  Bypass: {len(bypassed)} ADR/biotech tickers kept (MM-pinned/TAM): {bypassed}")
 
     results = []
     no_price_count = 0
@@ -1384,6 +1430,14 @@ def screen_stocks(sf1, equity_prices, adr_tickers=None, biotech_tickers=None,
             shares_arg = None
             if shares_diluted and shares_diluted[-1] and shares_diluted[-1] > 0:
                 shares_arg = float(shares_diluted[-1])
+            # v28.8 — Load per-ticker user_assumptions for both growth
+            # overrides AND TAM model inputs. Same file the report PDF
+            # and /assumptions endpoint read. Cached at module level so
+            # we don't re-read JSON for every ticker.
+            _ua = _load_user_assumptions_cached()
+            _stored = _ua.get(ticker.upper()) or {}
+            _growth_ov = _stored.get("overrides")
+            _tam_ov    = _stored.get("tam")
             _r = _canon_pt(
                 ebitda_series=ebitda,
                 revenue_series=revenue,
@@ -1394,6 +1448,8 @@ def screen_stocks(sf1, equity_prices, adr_tickers=None, biotech_tickers=None,
                 cash_on_hand=cash_on_hand,
                 shares_diluted=shares_arg,
                 sector=ticker_sector,
+                growth_overrides=_growth_ov,
+                tam_overrides=_tam_ov,
             )
             internal_tp = _r.target_price
             internal_pt_detail = _r.to_pt_detail()
@@ -2410,7 +2466,30 @@ def main(market_cap_preset=None, fed_target_rate=None, fed_neutral_rate=None,
         pl.col("marketcap").last().alias("marketcap"),
     ).filter((pl.col("marketcap") >= MARKET_CAP_MIN) & (pl.col("marketcap") <= MARKET_CAP_MAX))
     eligible = latest["ticker"].to_list()
-    print(f"  {len(eligible)} tickers in cap range")
+    # v28.8 — MM-pinned + TAM-tagged tickers bypass the market-cap filter
+    # so they always make it through to price-loading + scoring.
+    try:
+        _mc_bypass: set = set()
+        import json as _mc_json
+        _mc_pp = Path("/home/nixos/Prod/V1/src/user_pinned.json")
+        if _mc_pp.exists():
+            _mc_bypass.update(
+                t.upper() for t in (_mc_json.loads(_mc_pp.read_text()).get("pinned") or [])
+            )
+        _mc_ua = _load_user_assumptions_cached()
+        for _t, _rec in (_mc_ua or {}).items():
+            if (_rec.get("tam") or {}).get("tam_usd_billions"):
+                _mc_bypass.add(_t.upper())
+        # Pull bypassed tickers from the unfiltered sf1 — they have data
+        # even if marketcap is outside the band.
+        all_sf1_tickers = set(sf1["ticker"].to_list())
+        bypassed = [t for t in _mc_bypass if t in all_sf1_tickers and t not in eligible]
+        if bypassed:
+            eligible.extend(bypassed)
+            print(f"  Cap-bypass: +{len(bypassed)} MM-pinned/TAM tickers added (outside cap range): {sorted(bypassed)}")
+    except Exception as _e:
+        print(f"  [WARN] cap-bypass step failed: {_e}")
+    print(f"  {len(eligible)} tickers in cap range (+ bypassed)")
 
     print("[5/7] Loading equity prices + computing technicals (Wilder RSI)...")
     equity_prices = load_equity_prices(eligible)
@@ -2480,6 +2559,54 @@ def main(market_cap_preset=None, fed_target_rate=None, fed_neutral_rate=None,
     scored = apply_sector_cap(scored, MAX_PER_SECTOR, MAX_RESULTS)
     print(f"  Top {scored.height} scored and ranked (with blended targets, sector-capped)")
 
+    # v28.8 — Force-include MM-pinned tickers in long_screener_results.csv
+    # even if they hit any prior exclusion gate (ADR, biotech, negative-
+    # upside, sector cap, MAX_RESULTS). MM has explicitly starred these;
+    # we always want them visible on the dashboard. Pull their rows from
+    # the broader `screened` DataFrame (which has scores computed for the
+    # full pool). If a pinned ticker isn'\''t in `screened` either (e.g.
+    # ADR-filtered out before scoring), we skip — that data simply isn'\''t
+    # available without a separate compute path.
+    try:
+        import json as _json
+        # ── Build the "must-include" set ──
+        # Sources: (1) user_pinned.json (★ favorites), (2) any ticker with
+        # TAM overrides set in user_assumptions.json (MM has explicitly
+        # opted these into TAM-based valuation, so they need to be visible)
+        must_include: set = set()
+        pinned_path = Path("/home/nixos/Prod/V1/src/user_pinned.json")
+        if pinned_path.exists():
+            must_include.update(
+                t.upper() for t in (_json.loads(pinned_path.read_text()).get("pinned") or [])
+            )
+        ua = _load_user_assumptions_cached()
+        for t, rec in (ua or {}).items():
+            tam = rec.get("tam") or {}
+            if tam.get("tam_usd_billions"):
+                must_include.add(t.upper())
+
+        if must_include:
+            current_in_scored = set(scored["ticker"].to_list()) if scored.height else set()
+            missing = sorted(t for t in must_include if t not in current_in_scored)
+            if missing and screened.height > 0:
+                rescued = screened.filter(pl.col("ticker").is_in(missing))
+                if rescued.height > 0:
+                    rescued_scored = apply_dynamic_scores(rescued, weights)
+                    common_cols = [c for c in scored.columns if c in rescued_scored.columns]
+                    scored = pl.concat(
+                        [scored.select(common_cols), rescued_scored.select(common_cols)],
+                        how="vertical_relaxed",
+                    )
+                    rescued_tickers = set(rescued["ticker"].to_list())
+                    print(f"  Force-included {len(rescued_tickers)} must-show tickers: {sorted(rescued_tickers)}")
+                still_missing = [t for t in missing if t not in (rescued["ticker"].to_list()
+                                                                  if rescued.height else [])]
+                if still_missing:
+                    print(f"  WARN: must-show tickers NOT in scored pool "
+                          f"(likely ADR/biotech-filtered before scoring): {still_missing}")
+    except Exception as _e:
+        print(f"  [WARN] must-show rescue step failed: {_e}")
+
     if scored.height > 0:
         sectors = scored["sector"].to_list()
         from collections import Counter
@@ -2494,6 +2621,70 @@ def main(market_cap_preset=None, fed_target_rate=None, fed_neutral_rate=None,
     csv_path = output_dir / "long_screener_results.csv"
     scored.write_csv(str(csv_path))
     print(f"  Results CSV: {csv_path.resolve()}")
+
+    # v28.8 — Append rows for MM-pinned + TAM-tagged tickers that
+    # didn't survive the screen_stocks fundamental gate. We pull their
+    # PT + live price directly from the sentiment_refresh_server's
+    # /assumptions endpoint (which is the same engine using TAM
+    # overrides), and write a minimal row so the dashboard surfaces them.
+    # This is the last line of defense — if screen_stocks rejects them,
+    # we still want them visible.
+    try:
+        import json as _pp_json
+        import urllib.request as _pp_url
+        # Build must-keep set
+        _pp_must: set = set()
+        _pp_pp = Path("/home/nixos/Prod/V1/src/user_pinned.json")
+        if _pp_pp.exists():
+            _pp_must.update(
+                t.upper() for t in (_pp_json.loads(_pp_pp.read_text()).get("pinned") or [])
+            )
+        _pp_ua = _load_user_assumptions_cached()
+        for _t, _rec in (_pp_ua or {}).items():
+            if (_rec.get("tam") or {}).get("tam_usd_billions"):
+                _pp_must.add(_t.upper())
+
+        _pp_in_csv = set(scored["ticker"].to_list()) if scored.height else set()
+        _pp_missing = sorted(t for t in _pp_must if t not in _pp_in_csv)
+
+        if _pp_missing:
+            print(f"  Post-process: backfilling {len(_pp_missing)} must-show tickers from live API: {_pp_missing}")
+            csv_cols = scored.columns
+            appended = 0
+            with open(csv_path, "a") as fh:
+                for _tk in _pp_missing:
+                    try:
+                        _resp = _pp_url.urlopen(f"http://localhost:8085/assumptions/{_tk}", timeout=20)
+                        _d = _pp_json.loads(_resp.read())
+                        if _d.get("error"):
+                            print(f"    skip {_tk}: {_d['error']}")
+                            continue
+                        _pt_data = _d.get("pt_with_overrides") or _d.get("pt_engine_default") or {}
+                        _target = _pt_data.get("target_price")
+                        _lp     = _d.get("live_price")
+                        _upside = _pt_data.get("upside_pct")
+                        if not _target or not _lp:
+                            print(f"    skip {_tk}: no target/price")
+                            continue
+                        # Build a row matching csv_cols, defaulting missing fields to empty string
+                        row = []
+                        for col in csv_cols:
+                            if col == "ticker":           row.append(_tk)
+                            elif col == "last_price":     row.append(str(_lp))
+                            elif col == "internal_target":row.append(str(_target))
+                            elif col == "upside_pct":     row.append(str(_upside or 0))
+                            elif col == "target_price":   row.append(str(_target))
+                            elif col == "pt_source":      row.append("LIVE-MM")
+                            elif col == "composite_score":row.append("0.0")
+                            else:                          row.append("")
+                        fh.write(",".join(row) + "\n")
+                        appended += 1
+                        print(f"    [APPENDED] {_tk}: price=${_lp} PT=${_target}")
+                    except Exception as _e:
+                        print(f"    fail {_tk}: {type(_e).__name__}: {_e}")
+            print(f"  Post-process: appended {appended} row(s) to long_screener_results.csv")
+    except Exception as _e:
+        print(f"  [WARN] post-process backfill failed: {_e}")
 
     if screened.height > 0:
         universe_csv = output_dir / "screener_universe.csv"
