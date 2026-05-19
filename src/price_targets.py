@@ -204,6 +204,25 @@ def _rolling_median(series: Sequence, window: int = 3) -> list:
     return out
 
 
+def _smooth_2q(series: Sequence) -> Optional[float]:
+    """v29.0 — Conservative 2-quarter trailing mean of a numeric series.
+    Returns mean of the last two non-null values, or last value if only
+    one available, or None.
+
+    Used to dampen single-quarter spikes (e.g. DELL's AI server boom)
+    when computing forward-projection bases. MM directive: 'I rather
+    undershoot a target than get it totally wrong.'"""
+    if not series:
+        return None
+    clean = [v for v in series
+             if v is not None and not (isinstance(v, float) and np.isnan(v))]
+    if not clean:
+        return None
+    if len(clean) == 1:
+        return float(clean[-1])
+    return float((clean[-1] + clean[-2]) / 2.0)
+
+
 def _model_conviction(r2: float, n: int, cv: float,
                        r2_floor: Optional[float] = None,
                        r2_full:  Optional[float] = None) -> float:
@@ -691,7 +710,10 @@ def compute_target_price(
         cv   = float(np.std(ebitda_clean) / np.mean(np.abs(ebitda_clean))) \
                 if np.mean(np.abs(ebitda_clean)) > 0 else 1.0
         if fwd > 0:
-            trailing       = ebitda_clean[-1] * 4
+            # v29.0 — 2Q-smoothed trailing EBITDA (anti-spike). Falls back
+            # to single-quarter value if only one is available.
+            trailing_q = _smooth_2q(ebitda_clean) or ebitda_clean[-1]
+            trailing       = trailing_q * 4
             trail_mult     = current_ev / trailing if trailing > 0 else sm["ev_ebitda"]
             trail_clipped  = float(np.clip(trail_mult, 4.0, 40.0))
             sector_anchor  = sm["ev_ebitda"]
@@ -736,7 +758,9 @@ def compute_target_price(
         cv   = float(np.std(rev_clean) / np.mean(np.abs(rev_clean))) \
                 if np.mean(np.abs(rev_clean)) > 0 else 1.0
         if fwd > 0:
-            trail_mult        = current_ev / (rev_clean[-1] * 4) if rev_clean[-1] > 0 else sm["ev_rev"]
+            # v29.0 — 2Q-smoothed trailing revenue for EV/Rev anchor
+            trailing_q_rev = _smooth_2q(rev_clean) or rev_clean[-1]
+            trail_mult        = current_ev / (trailing_q_rev * 4) if trailing_q_rev > 0 else sm["ev_rev"]
             trail_clipped     = float(np.clip(trail_mult, 0.2, 20.0))
             sector_anchor     = sm["ev_rev"]
             growth_adj_anchor = sector_anchor * growth_mult
@@ -818,7 +842,11 @@ def compute_target_price(
     # ── MODEL 4: Emerging Growth (TAM-discounted projection) ─
     if emerging and len(rev_raw) >= 4:
         try:
-            current_ann_rev = rev_raw[-1] * 4
+            # v29.0 — 2Q-smoothed quarterly revenue as projection base.
+            # Dampens single-quarter spikes (the kind that would project
+            # forward into trillions over a 3-year decay).
+            current_q_rev   = _smooth_2q(rev_raw) or rev_raw[-1]
+            current_ann_rev = current_q_rev * 4
             decay = [0.80, 0.50, 0.25]
             target_mature_ann = 0.05
             rev_proj = current_ann_rev
