@@ -285,7 +285,22 @@ def _revenue_growth_stats(rev_clean: list) -> Tuple[float, float, bool, float]:
     if not qoq:
         return 0.0, 0.0, False, 1.0
     median_qoq = float(np.median(qoq))
-    ann_growth = (1 + median_qoq) ** 4 - 1
+    ann_growth_from_qoq = (1 + median_qoq) ** 4 - 1
+
+    # v28.9 — Sanity-cap implied annualized growth using actual YoY growth
+    # when available. QoQ × 4 over-states sustainable growth for names
+    # with a single quarter spike (e.g. DELL's AI-server tailwind:
+    # +23.6% QoQ → 133% annualized, but real YoY is closer to 25%).
+    # If we have 5+ quarters, use the more conservative of:
+    #   (a) QoQ-implied annualized: (1+median_qoq)^4 - 1
+    #   (b) YoY actual: rev[-1] / rev[-5] - 1, scaled by 1.5x to allow
+    #       some persistence
+    if len(rev_clean) >= 5 and rev_clean[-5] is not None and rev_clean[-5] > 0:
+        yoy = (rev_clean[-1] / rev_clean[-5]) - 1.0
+        ann_growth = min(ann_growth_from_qoq, max(yoy * 1.5, 0.0))
+    else:
+        ann_growth = ann_growth_from_qoq
+
     # v28.7 — Change C: loosened emerging-growth trigger. Previous gate
     # (QoQ >= 25% in 2 quarters = ~144% annualized growth) was so strict
     # that even NVDA (+15.3% median QoQ ~ 76% annualized), PLTR (~70%),
@@ -626,7 +641,27 @@ def compute_target_price(
     net_debt  = latest_debt - cash_on_hand
     net_debt_to_rev = (net_debt / (rev_raw[-1] * 4)) if rev_raw and rev_raw[-1] > 0 else 999
     is_clean_balance_sheet = net_debt_to_rev < 0.5
-    emerging = is_emerging and is_clean_balance_sheet
+
+    # v28.9 — Scale gate on emerging-growth model.
+    # The emerging-growth math projects current quarterly revenue forward
+    # using QoQ growth × decay schedule, then × (sector_mult × tier). For
+    # a sub-scale name (RBRK at $1B/yr, IONQ at $50M/yr) this gives a
+    # plausible mature equity value. For a mature company at $80B+/yr
+    # revenue, the same compound projection produces trillions of dollars
+    # of mature equity — total nonsense (e.g. DELL flipped to $4,362 PT).
+    #
+    # Cap emerging-growth at $5B trailing annualized revenue. Above that,
+    # the company has already won its market; conventional EV/EBITDA +
+    # EV/Rev + FCF Yield models do the right job.
+    EMERGING_MAX_TRAILING_REVENUE = 5e9   # $5B annual
+    trailing_ann_rev = (rev_raw[-1] * 4) if (rev_raw and rev_raw[-1] is not None) else 0
+    is_subscale = trailing_ann_rev < EMERGING_MAX_TRAILING_REVENUE
+
+    emerging = is_emerging and is_clean_balance_sheet and is_subscale
+    if is_emerging and is_clean_balance_sheet and not is_subscale:
+        result.gates_fired.append(
+            f"EMERGING_GROWTH_SUPPRESSED_AT_SCALE:ann_rev=${trailing_ann_rev/1e9:.1f}B"
+        )
 
     result.quality_score = quality
 
