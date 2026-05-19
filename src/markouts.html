@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RCG Markout Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+:root {
+    --navy: #0a1628; --navy-light: #111d33; --navy-mid: #162240;
+    --gold: #c8a84e; --gold-dim: #8b7635;
+    --text: #e2e8f0; --text-dim: #64748b;
+    --green: #22c55e; --red: #ef4444; --blue: #3b82f6;
+    --border: #1e3050;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'DM Sans', sans-serif; background: var(--navy); color: var(--text); min-height: 100vh; padding: 1.5rem; }
+.container { max-width: 1400px; margin: 0 auto; }
+.header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 1.25rem; border-bottom: 1px solid var(--border); margin-bottom: 1.5rem; flex-wrap: wrap; gap: 0.75rem; }
+.header h1 { font-size: 1.4rem; font-weight: 700; color: var(--gold); }
+.header .subtitle { font-size: 0.78rem; color: var(--text-dim); margin-top: 0.25rem; }
+.header .timestamp { font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; color: var(--text-dim); }
+
+.controls { display: flex; flex-wrap: wrap; gap: 1.25rem; padding: 1rem; background: var(--navy-light); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 1.25rem; }
+.control-group { display: flex; flex-direction: column; gap: 0.3rem; }
+.control-group label { font-size: 0.62rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.1em; font-family: 'JetBrains Mono', monospace; }
+.control-group select, .control-group button { background: var(--navy-mid); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 0.4rem 0.6rem; font-family: 'DM Sans', sans-serif; font-size: 0.85rem; min-width: 160px; cursor: pointer; }
+.control-group select:hover, .control-group button:hover { border-color: var(--gold); }
+.control-group select:focus { outline: none; border-color: var(--gold); }
+#btn-refresh { background: var(--gold); color: var(--navy); font-weight: 600; min-width: 110px; }
+#btn-refresh:hover { background: #d4b860; }
+
+.metrics-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; padding: 1.25rem; background: var(--navy-light); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 1.25rem; }
+.metric { display: flex; flex-direction: column; gap: 0.25rem; }
+.metric-label { font-size: 0.6rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.1em; font-family: 'JetBrains Mono', monospace; }
+.metric-value { font-size: 1.3rem; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: var(--gold); }
+.metric-value.pos { color: var(--green); }
+.metric-value.neg { color: var(--red); }
+.metric-sub  { font-size: 0.7rem; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; }
+
+.chart-container { background: var(--navy-light); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 1.25rem; }
+.chart-title { font-size: 0.95rem; font-weight: 600; color: var(--gold); margin-bottom: 0.75rem; padding-left: 0.5rem; }
+
+#pnl-chart   { width: 100%; height: 420px; }
+#dd-chart    { width: 100%; height: 180px; }
+
+.trade-rules-note { font-size: 0.72rem; color: var(--text-dim); padding: 0.75rem 1rem; background: var(--navy-mid); border-left: 3px solid var(--gold); border-radius: 4px; margin-bottom: 1.25rem; line-height: 1.5; }
+.trade-rules-note strong { color: var(--text); }
+
+.error-banner { background: #ef444420; border: 1px solid #ef444460; color: #fca5a5; padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.85rem; display: none; }
+.error-banner.visible { display: block; }
+
+.footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border); font-size: 0.7rem; color: var(--text-dim); text-align: center; }
+
+@media (max-width: 768px) {
+    body { padding: 1rem; }
+    .header h1 { font-size: 1.15rem; }
+    .controls { gap: 0.75rem; padding: 0.75rem; }
+    .control-group select, .control-group button { min-width: 140px; font-size: 0.8rem; }
+    .metric-value { font-size: 1.05rem; }
+    #pnl-chart  { height: 320px; }
+    #dd-chart   { height: 140px; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+    <div class="header">
+        <div>
+            <h1>Markout Dashboard <span style="font-size: 0.7rem; color: var(--text-dim);">v27</span></h1>
+            <div class="subtitle">Robin Capital Group &mdash; Trade-first model evaluation &mdash; <span id="trade-rules-summary">…</span></div>
+        </div>
+        <div class="timestamp" id="generated-at">…</div>
+    </div>
+
+    <div id="error-banner" class="error-banner"></div>
+
+    <div class="trade-rules-note" id="trade-rules-detail">
+        <strong>Strategy:</strong> long when score &ge; +60, short when score &le; -60. Exit when |score| &lt; 35 (hysteresis). Equal-weight max 15 concurrent positions. RTH only (9:30-16:00 ET).<br>
+        <strong>Costs:</strong> 5 bps/yr platform fee + slippage shown below (toggleable). Two curves: gross alpha + net of all-in.
+    </div>
+
+    <div class="controls">
+        <div class="control-group">
+            <label>Model</label>
+            <select id="sel-model"></select>
+        </div>
+        <div class="control-group">
+            <label>Slippage (bps/side)</label>
+            <select id="sel-slippage">
+                <option value="0bps">0 bps</option>
+                <option value="5bps" selected>5 bps (default)</option>
+                <option value="10bps">10 bps</option>
+            </select>
+        </div>
+        <div class="control-group">
+            <label>Champions only</label>
+            <select id="sel-champion-filter">
+                <option value="all">All models</option>
+                <option value="champions" selected>Family champions only</option>
+                <option value="trades">Has trades only</option>
+            </select>
+        </div>
+        <div class="control-group">
+            <label>&nbsp;</label>
+            <button id="btn-refresh" title="Re-read markouts.json from disk">↻ Refresh</button>
+        </div>
+    </div>
+
+    <div class="metrics-strip" id="metrics-strip">
+        <!-- Filled by JS -->
+    </div>
+
+    <div class="chart-container">
+        <div class="chart-title">Cumulative P&L (1.0 = entry capital)</div>
+        <div id="pnl-chart"></div>
+    </div>
+
+    <div class="chart-container">
+        <div class="chart-title">Drawdown (net curve, peak-to-trough)</div>
+        <div id="dd-chart"></div>
+    </div>
+
+    <div class="footer">
+        Lookback: <span id="lookback">…</span> trading days · Refresh cadence: nightly cron 02:00 ET + on-demand button above · See <code>docs/markout_dashboard_spec.md</code>
+    </div>
+</div>
+
+<script>
+// ─── State ────────────────────────────────────────────────────────────
+let allData = null;
+let currentModel = null;
+
+// ─── Boot ─────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+    loadData();
+    document.getElementById('btn-refresh').addEventListener('click', loadData);
+    document.getElementById('sel-model').addEventListener('change', e => {
+        currentModel = e.target.value;
+        renderChart(); renderMetrics();
+    });
+    document.getElementById('sel-slippage').addEventListener('change', () => {
+        renderChart(); renderMetrics();
+    });
+    document.getElementById('sel-champion-filter').addEventListener('change', () => {
+        populateModelSelector(); renderChart(); renderMetrics();
+    });
+});
+
+// ─── Data fetch ───────────────────────────────────────────────────────
+async function loadData() {
+    const banner = document.getElementById('error-banner');
+    banner.classList.remove('visible'); banner.textContent = '';
+    try {
+        const r = await fetch('markouts.json?_=' + Date.now(), {cache: 'no-cache'});
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        allData = await r.json();
+    } catch (e) {
+        banner.textContent = 'Failed to load markouts.json: ' + e.message
+            + '. Run the publish script: python3 src/markout_eval_publish.py';
+        banner.classList.add('visible');
+        return;
+    }
+    document.getElementById('generated-at').textContent =
+        'Generated: ' + (allData.generated_at || '?').slice(0, 19).replace('T', ' ');
+    document.getElementById('lookback').textContent = allData.lookback_days || '?';
+    const rules = allData.trade_rules || {};
+    document.getElementById('trade-rules-summary').textContent =
+        `entry ±${rules.entry_threshold}, exit ±${rules.exit_threshold}, `
+        + `max ${rules.max_concurrent} positions, ${rules.marking_horizon} marking`;
+    populateModelSelector();
+    renderChart();
+    renderMetrics();
+}
+
+// ─── Model selector ───────────────────────────────────────────────────
+function getFilteredModels() {
+    if (!allData || !allData.models) return [];
+    const filter = document.getElementById('sel-champion-filter').value;
+    let models = allData.models;
+    if (filter === 'champions')  models = models.filter(m => m.is_champion);
+    else if (filter === 'trades') models = models.filter(m => (m.n_trades || 0) > 0);
+    // Sort: champions first, then by 5bps cum_return desc
+    models.sort((a, b) => {
+        if (a.is_champion !== b.is_champion) return a.is_champion ? -1 : 1;
+        const ar = (a.summary && a.summary['5bps'] && a.summary['5bps'].cum_return) || -999;
+        const br = (b.summary && b.summary['5bps'] && b.summary['5bps'].cum_return) || -999;
+        return br - ar;
+    });
+    return models;
+}
+
+function populateModelSelector() {
+    const sel = document.getElementById('sel-model');
+    const prev = sel.value;
+    sel.innerHTML = '';
+    const models = getFilteredModels();
+    if (!models.length) {
+        sel.innerHTML = '<option>No models match filter</option>';
+        currentModel = null;
+        return;
+    }
+    for (const m of models) {
+        const opt = document.createElement('option');
+        const label = m.model + (m.horizon !== 'n/a' ? ` [${m.horizon}]` : '');
+        const star = m.is_champion ? '★ ' : '   ';
+        const n = m.n_trades || 0;
+        opt.value = m.model + '|' + m.horizon;
+        opt.textContent = star + label + ' (n=' + n + ')';
+        sel.appendChild(opt);
+    }
+    // Try to preserve selection
+    if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+    currentModel = sel.value;
+}
+
+function currentModelObj() {
+    if (!allData || !currentModel) return null;
+    const [stem, hz] = currentModel.split('|');
+    return (allData.models || []).find(m => m.model === stem && m.horizon === hz) || null;
+}
+
+// ─── Headline P&L chart ───────────────────────────────────────────────
+function renderChart() {
+    const m = currentModelObj();
+    if (!m) { Plotly.purge('pnl-chart'); Plotly.purge('dd-chart'); return; }
+    const slipKey = document.getElementById('sel-slippage').value;   // 0bps | 5bps | 10bps
+    const netKey  = 'equity_net_' + slipKey;
+
+    const gross   = m.equity_gross || [];
+    const net     = m[netKey] || [];
+
+    const traces = [];
+    if (gross.length) {
+        traces.push({
+            x: gross.map(p => p.date),
+            y: gross.map(p => p.value),
+            mode: 'lines', name: 'Gross alpha (no costs)',
+            line: { color: '#c8a84e', width: 1.5, dash: 'dot' },
+            hovertemplate: '%{x}<br>Gross: %{y:.4f}<extra></extra>',
+        });
+    }
+    if (net.length) {
+        traces.push({
+            x: net.map(p => p.date),
+            y: net.map(p => p.value),
+            mode: 'lines', name: 'Net (' + slipKey + ' slippage + 5bps/yr platform fee)',
+            line: { color: '#22c55e', width: 2.5 },
+            hovertemplate: '%{x}<br>Net: %{y:.4f}<extra></extra>',
+        });
+    }
+    // Benchmarks (placeholder for now — empty arrays render as nothing)
+    const bench = allData.benchmarks || {};
+    if (bench.ew_watchlist && bench.ew_watchlist.cum && bench.ew_watchlist.cum.length) {
+        traces.push({
+            x: bench.ew_watchlist.cum.map(p => p.date),
+            y: bench.ew_watchlist.cum.map(p => p.value),
+            mode: 'lines', name: 'Equal-weighted watchlist',
+            line: { color: '#64748b', width: 1, dash: 'dash' },
+        });
+    }
+    if (bench.spy && bench.spy.cum && bench.spy.cum.length) {
+        traces.push({
+            x: bench.spy.cum.map(p => p.date),
+            y: bench.spy.cum.map(p => p.value),
+            mode: 'lines', name: 'SPY',
+            line: { color: '#3b82f6', width: 1, dash: 'dash' },
+        });
+    }
+
+    Plotly.react('pnl-chart', traces, {
+        paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { family: 'DM Sans, sans-serif', color: '#e2e8f0', size: 12 },
+        margin: { l: 60, r: 30, t: 10, b: 50 },
+        xaxis: { gridcolor: '#1e3050', zerolinecolor: '#1e3050', tickfont: { size: 11 } },
+        yaxis: { gridcolor: '#1e3050', zerolinecolor: '#1e3050', tickformat: '.3f', tickfont: { size: 11 } },
+        legend: { orientation: 'h', x: 0, y: -0.18, bgcolor: 'rgba(0,0,0,0)' },
+        hovermode: 'x unified',
+    }, { displayModeBar: false, responsive: true });
+
+    // Drawdown chart — net curve only
+    if (net.length) {
+        let peak = net[0].value;
+        const dd = net.map(p => {
+            if (p.value > peak) peak = p.value;
+            return { date: p.date, dd: (p.value / peak - 1) * 100 };
+        });
+        Plotly.react('dd-chart', [{
+            x: dd.map(p => p.date), y: dd.map(p => p.dd),
+            fill: 'tozeroy', mode: 'lines',
+            fillcolor: '#ef444440', line: { color: '#ef4444', width: 1.5 },
+            hovertemplate: '%{x}<br>DD: %{y:.2f}%<extra></extra>',
+            name: 'Drawdown',
+        }], {
+            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+            font: { family: 'DM Sans, sans-serif', color: '#e2e8f0', size: 11 },
+            margin: { l: 60, r: 30, t: 10, b: 30 },
+            xaxis: { gridcolor: '#1e3050', zerolinecolor: '#1e3050', tickfont: { size: 10 } },
+            yaxis: { gridcolor: '#1e3050', zerolinecolor: '#1e3050',
+                     tickformat: '.1f', ticksuffix: '%', tickfont: { size: 10 } },
+            showlegend: false, hovermode: 'x unified',
+        }, { displayModeBar: false, responsive: true });
+    } else {
+        Plotly.purge('dd-chart');
+    }
+}
+
+// ─── Header metrics strip ─────────────────────────────────────────────
+function renderMetrics() {
+    const m = currentModelObj();
+    const strip = document.getElementById('metrics-strip');
+    strip.innerHTML = '';
+    if (!m) {
+        strip.innerHTML = '<div style="color:var(--text-dim);">No model selected.</div>';
+        return;
+    }
+    const slipKey = document.getElementById('sel-slippage').value;
+    const s = (m.summary && m.summary[slipKey]) || {};
+    const grossR = (m.summary && m.summary.gross && m.summary.gross.cum_return);
+    const ret = s.cum_return || 0;
+    const fmtPct = (v) => (v == null ? '—' : ((v * 100 >= 0 ? '+' : '') + (v * 100).toFixed(2) + '%'));
+    const fmtNum = (v, dp) => (v == null ? '—' : v.toFixed(dp));
+    const sign = (v) => (v == null ? '' : (v > 0 ? 'pos' : (v < 0 ? 'neg' : '')));
+
+    const items = [
+        { label: 'Cumulative return',  value: fmtPct(ret),                cls: sign(ret),
+          sub: 'Gross: ' + fmtPct(grossR) },
+        { label: 'Sharpe (annualized)', value: fmtNum(s.sharpe, 2),       cls: sign(s.sharpe) },
+        { label: 'Max drawdown',        value: fmtPct(s.max_dd),          cls: sign(s.max_dd) },
+        { label: 'Hit rate',            value: ((m.hit_rate || 0) * 100).toFixed(1) + '%', cls: '' },
+        { label: 'Completed trades',    value: m.n_trades || 0,
+          sub: 'open: ' + (m.n_open_at_end || 0) + ' · long: ' + (m.n_long || 0) + ' · short: ' + (m.n_short || 0) },
+        { label: 'Avg hold (mkt-min)',  value: Math.round(m.avg_hold_trading_minutes || 0),
+          sub: '~' + ((m.avg_hold_trading_minutes || 0) / 60).toFixed(1) + 'h market time' },
+    ];
+    for (const it of items) {
+        const div = document.createElement('div');
+        div.className = 'metric';
+        div.innerHTML = `
+            <div class="metric-label">${it.label}</div>
+            <div class="metric-value ${it.cls}">${it.value}</div>
+            ${it.sub ? `<div class="metric-sub">${it.sub}</div>` : ''}
+        `;
+        strip.appendChild(div);
+    }
+}
+</script>
+</body>
+</html>

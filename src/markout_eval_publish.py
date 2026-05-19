@@ -32,6 +32,7 @@ EW + SPY lines render as flat zero baselines until that data lands.
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import time
 from datetime import datetime, timezone
@@ -50,6 +51,8 @@ from models_leaderboard import family_from_model
 
 
 OUTPUT_PATH    = Path("/home/nixos/Prod/V1/outputs/markouts.json")
+HTML_SOURCE    = Path("/home/nixos/Prod/V1/src/markouts.html")
+HTML_DEPLOYED  = Path("/home/nixos/Prod/V1/outputs/markouts.html")
 HORIZONS       = ["30min", "60min", "4h"]
 SLIPPAGE_TIERS = [0.0, 5.0, 10.0]      # bps/side options shown in UI
 DEFAULT_SLIP   = 5.0
@@ -313,6 +316,15 @@ def main(lookback: int = LOOKBACK_DAYS) -> dict:
           f"· {len(model_payloads)} rows · "
           f"{n_with_trades} with trades · "
           f"elapsed {out['summary']['elapsed_seconds']}s")
+
+    # Deploy HTML to outputs/ alongside the JSON so the http.server can
+    # serve them from the same directory. The HTML is the source-of-truth
+    # version in src/; the outputs/ copy is the runtime served version.
+    if HTML_SOURCE.exists():
+        shutil.copy2(HTML_SOURCE, HTML_DEPLOYED)
+        print(f"[markout_publish] copied {HTML_SOURCE.name} → outputs/")
+    else:
+        print(f"[markout_publish] WARN: {HTML_SOURCE} missing — dashboard HTML not deployed")
 
     return out
 
