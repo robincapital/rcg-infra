@@ -33,7 +33,13 @@ from tool_wrapper import execute as tool_execute
 from tool_wrapper import get_schemas_for_hat
 
 
-MAX_TOOL_LOOPS = 30        # safety cap on the agentic loop per task
+MAX_TOOL_LOOPS = 50        # v29.11 — raised from 30; exploratory analysis
+                            # sessions (markout diagnostics, leaderboard
+                            # drill-down) routinely need 20-40 iterations
+                            # of read→interpret→read. 50 gives headroom
+                            # without letting a true infinite loop run away.
+MAX_DUPLICATE_TOOL_CALLS = 3  # If the same (tool, input) fires 3+ times in
+                              # a row, short-circuit with a coaching note.
 DEFAULT_MODEL  = "claude-sonnet-4-5"
 DEFAULT_MAX_TOKENS_OUT = 16384   # Sonnet 4.5 supports up to 64k; 16k handles
                                   # comprehensive specs, multi-file diffs, etc.
@@ -92,6 +98,11 @@ def run_turn(
         return
 
     # ── The main agentic loop ────────────────────────────────────────
+    # v29.11 — track recent tool calls so we can short-circuit obvious
+    # loops (e.g. the May 20 incident where the model issued essentially
+    # the same `python3 << EOF` heredoc 30 times in a row, each time
+    # exploring markouts.json slightly differently and hitting the cap).
+    recent_tool_fingerprints: list[str] = []
     for loop_iter in range(MAX_TOOL_LOOPS):
         # Cost cap check before every API call
         ok, reason = cost_tracker.check_caps()
@@ -190,6 +201,29 @@ def run_turn(
             label = _format_tool_call_label(tname, tin)
             slack_post_fn(f"🔧 `{tname}`: {label}")
 
+            # v29.11 — Duplicate-call detection. Build a fingerprint from
+            # tool name + first 200 chars of input. If we've issued the
+            # same fingerprint N times in a row, short-circuit with a
+            # coaching error instead of executing — this is almost always
+            # the model stuck in a confused exploratory loop.
+            fp = f"{tname}::{str(tin)[:200]}"
+            recent_tool_fingerprints.append(fp)
+            if len(recent_tool_fingerprints) > MAX_DUPLICATE_TOOL_CALLS:
+                recent_tool_fingerprints = recent_tool_fingerprints[-MAX_DUPLICATE_TOOL_CALLS:]
+            if (len(recent_tool_fingerprints) >= MAX_DUPLICATE_TOOL_CALLS
+                    and len(set(recent_tool_fingerprints)) == 1):
+                result = (
+                    "ERROR: identical tool call has fired "
+                    f"{MAX_DUPLICATE_TOOL_CALLS} times in a row "
+                    "({tname} with same input). Stopping the loop. "
+                    "Change your approach: try a different tool, a "
+                    "different input, or summarize what you've learned "
+                    "and ask the user for direction."
+                )
+                slack_post_fn(f"⚠️ Same tool call fired {MAX_DUPLICATE_TOOL_CALLS}x — short-circuiting.")
+                state.add_tool_result(tool_use_id=tu.id, result=result, is_error=True)
+                continue
+
             result = tool_execute(tname, tin, allowed_tools)
             # Truncate large outputs for the model context too (saves cost)
             if len(result) > 50_000:
@@ -202,7 +236,27 @@ def run_turn(
             state.trim_history(max_messages=40)
 
     # If we fall out of the loop without end_turn:
-    slack_post_fn(f"⚠️ hit MAX_TOOL_LOOPS ({MAX_TOOL_LOOPS}) — stopping. Reply to continue if needed.")
+    # v29.11 — Include a useful summary so the user sees WHAT the agent
+    # was doing instead of just "stopped." Last 5 tool calls + cost.
+    last_calls = []
+    try:
+        for m in state.data["messages"][-12:]:
+            if m.get("role") != "assistant": continue
+            for b in m.get("content", []) or []:
+                if isinstance(b, dict) and b.get("type") == "tool_use":
+                    nm = b.get("name")
+                    inp = b.get("input") or {}
+                    label = _format_tool_call_label(nm, inp)
+                    last_calls.append(f"`{nm}`: {label[:80]}")
+    except Exception:
+        pass
+    summary = "\n".join("• " + c for c in last_calls[-5:]) if last_calls else "(no tool calls captured)"
+    slack_post_fn(
+        f"⚠️ hit MAX_TOOL_LOOPS ({MAX_TOOL_LOOPS}) — stopping.\n\n"
+        f"Last 5 tool calls:\n{summary}\n\n"
+        f"Reply with a more specific direction, or `continue` to keep going. "
+        f"Cost so far: {cost_tracker.summary()}"
+    )
     state.set_state("IDLE")
 
 
