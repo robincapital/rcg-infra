@@ -1002,6 +1002,14 @@
     { key: 'fcf_growth_ann_pct',    label: 'FCF growth',         unit: '%/yr', min: -30, max: 80,  step: 0.5 },
     { key: 'debt_paydown_ann_pct',  label: 'Net-debt paydown',   unit: '%/yr', min:   0, max: 100, step: 1   },
   ];
+  // v29.5 — TAM model inputs (Change D). Setting TAM > 0 fires the
+  // 5th valuation model with 100% blend weight (D1). Engine caps:
+  //   penetration 20%, FCF margin 40%, TAM sector-capped.
+  const TAM_INPUTS = [
+    { key: 'tam_usd_billions', label: 'TAM ($B, 5yr forward)', unit: 'B',  min:   0, max: 5000, step: 1   },
+    { key: 'penetration_pct',  label: 'Mature penetration',     unit: '%',  min:   0, max: 20,   step: 0.5 },
+    { key: 'fcf_margin_pct',   label: 'Mature FCF margin',      unit: '%',  min:   0, max: 40,   step: 0.5 },
+  ];
   function renderAssumptionsPanelInto(el, ticker, data) {
     if (!data || data.error) {
       el.innerHTML = `<div class="empty" style="padding:0.5rem;color:var(--red)">Assumptions unavailable: ${data?.error || 'no data'}</div>`;
@@ -1050,6 +1058,30 @@
       ? `live $${(+data.live_price).toFixed(2)}`
       : `<span style="color:var(--dim)">no live price — PT uses $100 placeholder</span>`;
 
+    // v29.5 — TAM model sliders (3 inputs). When tam_usd_billions > 0,
+    // engine flips to TAM-dominates mode (100% weight on the 5th model).
+    const tamOv = data.tam_overrides || {};
+    const tamFired = (tamOv.tam_usd_billions || 0) > 0;
+    const tamCards = TAM_INPUTS.map(inp => {
+      const v = (tamOv[inp.key] != null) ? tamOv[inp.key] : 0;
+      const isUserSet = v > 0;
+      return `<div class="assumption-card" data-tam-key="${inp.key}">
+        <div class="row">
+          <span class="lbl">${inp.label}</span>
+          <span class="val ${isUserSet ? 'user-set' : ''}" data-tam-display="${inp.key}">${(+v).toFixed(1)}${inp.unit}</span>
+        </div>
+        <input type="range" min="${inp.min}" max="${inp.max}" step="${inp.step}" value="${v}"
+               data-tam-input="${inp.key}" />
+        <div class="baseline" data-tam-reset="${inp.key}" title="Click to reset to 0 (disable TAM model for this input)">
+          set 0 to disable ↺
+        </div>
+      </div>`;
+    }).join('');
+    const tamHeaderColor = tamFired ? 'var(--gold)' : 'var(--dim)';
+    const tamStatus = tamFired
+      ? `<span style="color:var(--gold);font-weight:600;">TAM MODEL ACTIVE</span> — 100% weight on TAM PT; other models shown for reference only.`
+      : `<span style="color:var(--dim);">Set TAM &gt; 0 to activate TAM-based valuation</span> for this name (engine uses 4-model conventional blend otherwise).`;
+
     el.innerHTML = `
       <h4>
         <span>Assumptions · ${ticker}</span>
@@ -1057,6 +1089,13 @@
       </h4>
       <div class="assumptions-grid">${cards}</div>
       <div class="assumption-pt-summary">${summary}</div>
+      <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+          <h4 style="margin:0;font-size:11px;color:${tamHeaderColor};text-transform:uppercase;letter-spacing:0.5px;">TAM Model (Change D)</h4>
+          <span style="font-size:10px;">${tamStatus}</span>
+        </div>
+        <div class="assumptions-grid">${tamCards}</div>
+      </div>
       <div class="assumption-actions">
         <button class="primary" data-action="save">Save & Recompute</button>
         <button data-action="preset-bull"  title="Bull case: rev/EBITDA/FCF all +50% above 6q baseline, debt paydown 30%/yr">Bull preset</button>
@@ -1067,17 +1106,40 @@
       <div style="margin-top:6px;font-size:9px;color:var(--dim);line-height:1.4">
         Tip: PT engine projects 4 quarters forward. To see large PT moves, push multiple inputs together
         (rev + margin + FCF + paydown), not just one. Sector multiple ceilings cap any single input from
-        running away.
+        running away. <br>
+        TAM model fires when TAM &gt; 0: use 5yr-forward TAM, mature penetration %, mature FCF margin %.
+        Conservative caps: 20% pen, 40% FCF margin, sector TAM ceiling.
       </div>`;
 
-    // Wire slider input → live value display
-    el.querySelectorAll('input[type="range"]').forEach(inp => {
+    // Wire slider input → live value display (growth sliders)
+    el.querySelectorAll('input[data-input]').forEach(inp => {
       const key = inp.dataset.input;
       const disp = el.querySelector(`[data-display="${key}"]`);
       inp.addEventListener('input', () => {
         const u = ASSUMPTION_INPUTS.find(i => i.key === key).unit;
         disp.textContent = (+inp.value).toFixed(1) + u;
         disp.classList.add('user-set');
+      });
+    });
+    // v29.5 — TAM sliders
+    el.querySelectorAll('input[data-tam-input]').forEach(inp => {
+      const key = inp.dataset.tamInput;
+      const disp = el.querySelector(`[data-tam-display="${key}"]`);
+      inp.addEventListener('input', () => {
+        const u = TAM_INPUTS.find(i => i.key === key).unit;
+        disp.textContent = (+inp.value).toFixed(1) + u;
+        disp.classList.toggle('user-set', +inp.value > 0);
+      });
+    });
+    el.querySelectorAll('[data-tam-reset]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const key = btn.dataset.tamReset;
+        const inp = el.querySelector(`[data-tam-input="${key}"]`);
+        const disp = el.querySelector(`[data-tam-display="${key}"]`);
+        inp.value = 0;
+        const u = TAM_INPUTS.find(i => i.key === key).unit;
+        disp.textContent = '0.0' + u;
+        disp.classList.remove('user-set');
       });
     });
     // Per-slider baseline reset
@@ -1106,7 +1168,19 @@
         if (b == null || Math.abs(v - b) >= inp.step) body[inp.key] = v;
         else body[inp.key] = null;
       });
-      if (!Object.values(body).some(v => v != null)) {
+      // v29.5 — TAM block (3 inputs). Only sent when at least tam_usd_billions > 0.
+      // If all zero, treat as TAM-not-set (engine falls back to 4-model blend).
+      const tamBody = {};
+      let tamAny = false;
+      TAM_INPUTS.forEach(inp => {
+        const v = +el.querySelector(`[data-tam-input="${inp.key}"]`).value;
+        if (v > 0) { tamBody[inp.key] = v; tamAny = true; }
+        else tamBody[inp.key] = null;
+      });
+      if (tamAny) body.tam = tamBody;
+
+      const growthAny = Object.values(body).some(v => v != null && typeof v !== 'object');
+      if (!growthAny && !tamAny) {
         // Nothing to save — treat as clear
         await clearAssumptions(ticker, el);
         btn.disabled = false; btn.textContent = 'Save & Recompute';
@@ -3051,6 +3125,20 @@
       const ptTitle   = (userPT != null && enginePT != null)
         ? `User assumptions PT $${userPT.toFixed(2)}\n(engine default would be $${enginePT.toFixed(2)})\nConviction: ${convStr}`
         : `Conviction: ${convStr}`;
+      // v29.5 — Model-driver badge: small color-coded chip showing which model drove the PT.
+      const dominantModel = ptDetail?.dominant_model || null;
+      const MODEL_BADGE_STYLES = {
+        'tam':              { label: 'TAM',     bg: '#c8a84e', fg: '#1a1500' },  // gold
+        'ev_ebitda':        { label: 'EBITDA',  bg: '#3b82f6', fg: '#fff'    },  // blue
+        'ev_rev':           { label: 'REV',     bg: '#06b6d4', fg: '#fff'    },  // cyan
+        'fcf_yield':        { label: 'FCF',     bg: '#a855f7', fg: '#fff'    },  // purple
+        'emerging_growth':  { label: 'EMERG',   bg: '#f97316', fg: '#fff'    },  // orange
+        'ev_ebitda_fb':     { label: 'FB-EB',   bg: '#64748b', fg: '#fff'    },  // gray (fallback)
+        'ev_rev_fb':        { label: 'FB-REV',  bg: '#64748b', fg: '#fff'    },  // gray
+      };
+      const badge = dominantModel && MODEL_BADGE_STYLES[dominantModel]
+        ? `<span style="display:inline-block;background:${MODEL_BADGE_STYLES[dominantModel].bg};color:${MODEL_BADGE_STYLES[dominantModel].fg};padding:1px 4px;border-radius:2px;font-size:8.5px;font-weight:700;letter-spacing:0.3px;margin-left:4px;vertical-align:1px;" title="Dominant valuation model: ${dominantModel}">${MODEL_BADGE_STYLES[dominantModel].label}</span>`
+        : '';
       html.push(`
         <tr>
           <td class="neutral">${m.rank ?? i+1}</td>
@@ -3060,7 +3148,7 @@
           <td class="neutral">${fmtPx(m.eod)}</td>
           <td>${fmtPx(m.livePx)}</td>
           <td class="${moveClass(m.move)}">${fmtPct(m.move)}</td>
-          <td class="neutral ${userPT != null ? 'pt-user-overridden' : ''}" title="${ptTitle}">${assumptionDot(m.ticker)}${fmtPx(displayPT)}${convictionBadge(convScore)}</td>
+          <td class="neutral ${userPT != null ? 'pt-user-overridden' : ''}" title="${ptTitle}">${assumptionDot(m.ticker)}${fmtPx(displayPT)}${badge}${convictionBadge(convScore)}</td>
           <td class="${upsideCls}">${fmtPct(displayUps)}</td>
           <td>${m.rsi == null ? '—' : m.rsi.toFixed(0)}</td>
           <td>${m.volRatio == null ? '—' : m.volRatio.toFixed(2)+'x'}</td>
