@@ -1,0 +1,25 @@
+[Unit]
+Description=RCG Slack Agent (Phase 1 — single brain, channel-based hat-switching)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/nixos/Prod/V1/src/agent
+ExecStart=/home/nixos/Prod/V1/var/agent_venv/bin/python /home/nixos/Prod/V1/src/agent/slack_adapter.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+# v29.10 — Explicit PATH so the agent's tool_wrapper can spawn bash, git,
+# psql, ssh. NixOS user-systemd doesn't inherit the login-shell PATH;
+# without this, subprocess.run(["bash", ...]) failed last night with
+# "No such file or directory: 'bash'" — crippling all agent commands.
+Environment="PATH=/run/current-system/sw/bin:/home/nixos/Prod/V1/var/agent_venv/bin:/nix/var/nix/profiles/default/bin:/usr/bin:/bin"
+
+# Resource limits
+MemoryMax=1G
+TasksMax=64
+
+[Install]
+WantedBy=default.target
