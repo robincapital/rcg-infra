@@ -79,6 +79,13 @@
   th.sorted { color: var(--gold); }
   th.sorted::after { content: " ↓"; }
   th.sorted.asc::after { content: " ↑"; }
+  /* v29.9 — Secondary + tertiary sort tiers (shift-click to add). */
+  th.sorted-secondary { color: #d4b860; opacity: 0.85; }
+  th.sorted-secondary::after { content: " ↓"; }
+  th.sorted-secondary.asc::after { content: " ↑"; }
+  th.sorted-tertiary { color: #b89a44; opacity: 0.70; }
+  th.sorted-tertiary::after { content: " ↓"; }
+  th.sorted-tertiary.asc::after { content: " ↑"; }
   th:first-child, td:first-child { text-align: left; }
   th.tkr-col, td.tkr { text-align: left; }
   tr:hover td { background: rgba(201,168,76,0.05); }
@@ -804,7 +811,7 @@
   <div class="panel panel-top">
     <h2>Top 40 — Fundamental + Predictive Action</h2>
     <div class="legend">
-      Click ticker for chart + PT breakdown · click a badge to filter · <strong>Pred is signed</strong>: + bull, − bear<br>
+      Click ticker for chart + PT breakdown · click a column header to sort · <strong>Shift-click</strong> to add secondary sort · click a badge to filter · <strong>Pred is signed</strong>: + bull, − bear<br>
       <span class="badge badge-pre" data-filter="PRE-BREAKOUT">PRE-BREAKOUT</span>
       <span class="badge badge-breakout" data-filter="BREAKOUT">BREAKOUT</span>
       <span class="badge badge-strong" data-filter="STRONG">STRONG</span>
@@ -830,6 +837,7 @@
           <tr>
             <th data-col="rank"      data-type="num">#</th>
             <th class="tkr-col" data-col="ticker" data-type="str">Ticker</th>
+            <th data-col="sector"    data-type="str" title="Click to sort by sector. Shift-click any header for secondary sort.">Sector</th>
             <th data-col="composite" data-type="num">Comp</th>
             <th data-col="mktcap"    data-type="num">MktCap</th>
             <th data-col="eod"       data-type="num">EOD</th>
@@ -848,7 +856,7 @@
             <th data-col="report" data-type="str" title="Generate 1-page valuation report (Save as PDF from the print dialog)">PDF</th>
           </tr>
         </thead>
-        <tbody><tr><td colspan="18" class="loading empty">loading…</td></tr></tbody>
+        <tbody><tr><td colspan="19" class="loading empty">loading…</td></tr></tbody>
       </table>
     </div>
     <div class="meta" id="top-meta">—</div>
@@ -2076,36 +2084,78 @@
   }
 
   // ── Sortable table state ─────────────────────────────────────
+  // v29.9 — Each table's sort state is a STACK (primary, secondary, ...).
+  // Plain click on a header REPLACES the stack with that single column.
+  // Shift-click ADDS the column as secondary (or toggles its direction
+  // if already in the stack). Cap of 3 tiers to keep behavior predictable.
   const sortState = {
-    movers: { col: 'move',  type: 'num', dir: -1 },  // default: largest abs move first → handled in render
-    top:    { col: 'composite', type: 'num', dir: -1 },
+    movers: [{ col: 'move',  type: 'num', dir: -1 }],
+    top:    [{ col: 'composite', type: 'num', dir: -1 }],
   };
-  function makeSorter(state) {
+  function makeSorter(stack) {
+    // Accept either a single state object (back-compat) or an array of states
+    const arr = Array.isArray(stack) ? stack : [stack];
     return (a, b) => {
-      let av = a[state.col], bv = b[state.col];
-      if (state.type === 'num') {
-        av = (av == null || !isFinite(av)) ? -Infinity : av;
-        bv = (bv == null || !isFinite(bv)) ? -Infinity : bv;
-        return state.dir * (av - bv);
+      for (const state of arr) {
+        let av = a[state.col], bv = b[state.col];
+        let cmp;
+        if (state.type === 'num') {
+          av = (av == null || !isFinite(av)) ? -Infinity : av;
+          bv = (bv == null || !isFinite(bv)) ? -Infinity : bv;
+          cmp = state.dir * (av - bv);
+        } else {
+          av = String(av || ''); bv = String(bv || '');
+          cmp = state.dir * av.localeCompare(bv);
+        }
+        if (cmp !== 0) return cmp;
       }
-      av = String(av || ''); bv = String(bv || '');
-      return state.dir * av.localeCompare(bv);
+      return 0;
     };
   }
   function attachSortHandlers(tableId, stateKey, rerender) {
     const table = document.getElementById(tableId);
     table.querySelectorAll('th[data-col]').forEach(th => {
-      th.addEventListener('click', () => {
+      th.addEventListener('click', (ev) => {
         const col = th.dataset.col;
         const type = th.dataset.type || 'num';
-        const st = sortState[stateKey];
-        if (st.col === col) st.dir = -st.dir;
-        else { st.col = col; st.type = type; st.dir = (type === 'num' ? -1 : 1); }
+        const stack = sortState[stateKey];
+        if (ev.shiftKey) {
+          const existing = stack.find(s => s.col === col);
+          if (existing) {
+            existing.dir = -existing.dir;
+          } else {
+            stack.push({ col, type, dir: (type === 'num' ? -1 : 1) });
+            if (stack.length > 3) stack.shift();
+          }
+        } else {
+          if (stack.length === 1 && stack[0].col === col) {
+            stack[0].dir = -stack[0].dir;
+          } else {
+            sortState[stateKey] = [{ col, type, dir: (type === 'num' ? -1 : 1) }];
+          }
+        }
         rerender();
         // Update header visuals
-        table.querySelectorAll('th').forEach(t => t.classList.remove('sorted', 'asc'));
-        th.classList.add('sorted');
-        if (st.dir === 1) th.classList.add('asc');
+        table.querySelectorAll('th').forEach(t => {
+          t.classList.remove('sorted', 'asc', 'sorted-secondary', 'sorted-tertiary');
+          const badge = t.querySelector('.sort-tier');
+          if (badge) badge.remove();
+        });
+        sortState[stateKey].forEach((s, i) => {
+          const h = table.querySelector(`th[data-col="${s.col}"]`);
+          if (!h) return;
+          if (i === 0)      h.classList.add('sorted');
+          else if (i === 1) h.classList.add('sorted-secondary');
+          else              h.classList.add('sorted-tertiary');
+          if (s.dir === 1) h.classList.add('asc');
+          if (sortState[stateKey].length > 1) {
+            const badge = document.createElement('span');
+            badge.className = 'sort-tier';
+            badge.style.cssText = 'font-size:8px;color:var(--gold);margin-left:2px;vertical-align:1px;';
+            badge.textContent = (i === 0 ? '①' : i === 1 ? '②' : '③');
+            h.appendChild(badge);
+          }
+        });
       });
     });
   }
@@ -3044,7 +3094,7 @@
         ${row.bbgName ? `<span style="color:var(--gold); font-weight:600; font-style:normal; margin-right:6px;">${row.bbgName}</span> · ` : ''}${row.description}
       </div>
     ` : '';
-    return `<tr class="detail-row"><td colspan="18">
+    return `<tr class="detail-row"><td colspan="19">
       ${descBlock}
       <div class="detail-top">
         <div>${chart}</div>
@@ -3095,7 +3145,8 @@
       return;
     }
     const st = sortState.movers;
-    const isDefault = (st.col === 'move' && st.dir === -1);
+    // st is now an array of sort tiers; default = exactly one tier sorting by move desc
+    const isDefault = (st.length === 1 && st[0].col === 'move' && st[0].dir === -1);
 
     if (isDefault) {
       // Split mode: top 5 gainers (move > 0 desc) + top 5 losers (move < 0 asc)
@@ -3174,7 +3225,7 @@
       const empty = filters.starredOnly
         ? 'no starred tickers yet — click ☆ on any row, or type a ticker in the toolbar and press + Pin'
         : 'no fundamental + BBG overlap yet';
-      tbody.innerHTML = `<tr><td colspan="18" class="empty">${empty}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="19" class="empty">${empty}</td></tr>`;
       document.getElementById('top-meta').textContent = '—';
       return;
     }
@@ -3235,6 +3286,7 @@
         <tr>
           <td class="neutral">${m.rank ?? i+1}</td>
           <td class="tkr" data-ticker="${m.ticker}">${starHtml(m.ticker)}${m.ticker}</td>
+          <td class="neutral" style="font-size:10px;color:var(--dim);max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${m.sector || ''}">${m.sector || '—'}</td>
           <td>${fmt(m.composite, 2)}</td>
           <td class="neutral">${fmtCap(m.mktcap)}</td>
           <td class="neutral">${fmtPx(m.eod)}</td>
@@ -3530,6 +3582,7 @@ Signal: ${m.insSignal ?? 'neutral'}`;
           signalsScore: sigCount,
           surge: pred.surge, udv: pred.udv, accel: pred.accel, vwap: pred.vwap, range: pred.range,
           composite: fund?.composite_score ?? null,
+          sector:    fund?.sector ?? '',   // v29.9 — surfaced as Top 40 column
           mktcap:    fund?.marketcap ?? null,
           rank:      fund?.rank ?? null,
           targetPx:  fund?.target_price ?? null,

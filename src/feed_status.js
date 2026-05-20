@@ -41,7 +41,7 @@
     // ─── Inject CSS ───
     const css = `
     .rcg-feed-status {
-        position: fixed; top: 0.75rem; right: 0.75rem; z-index: 9999;
+        position: fixed; bottom: 0.75rem; right: 0.75rem; z-index: 9999;
         background: rgba(10, 22, 40, 0.92); border: 1px solid #1e3050;
         border-radius: 6px; padding: 0.4rem 0.6rem;
         font-family: 'JetBrains Mono', monospace, sans-serif;
@@ -50,6 +50,8 @@
         backdrop-filter: blur(4px);
         box-shadow: 0 2px 8px rgba(0,0,0,0.4);
     }
+    /* Collapsed mode starts smaller — click header to expand */
+    .rcg-feed-status.collapsed { padding: 0.25rem 0.5rem; max-width: 110px; }
     .rcg-feed-status-header {
         font-size: 0.55rem; color: #8b7635; text-transform: uppercase;
         letter-spacing: 0.1em; margin-bottom: 0.25rem;
@@ -69,7 +71,7 @@
     .rcg-feed-status.collapsed { padding: 0.3rem 0.5rem; min-width: 0; }
     .rcg-fs-toggle { cursor: pointer; user-select: none; }
     @media (max-width: 768px) {
-        .rcg-feed-status { font-size: 0.6rem; max-width: 200px; top: 0.5rem; right: 0.5rem; }
+        .rcg-feed-status { font-size: 0.6rem; max-width: 200px; bottom: 0.5rem; right: 0.5rem; }
     }
     `;
     const style = document.createElement("style");
@@ -78,7 +80,9 @@
 
     // ─── Inject widget ───
     const widget = document.createElement("div");
-    widget.className = "rcg-feed-status";
+    // v29.9 — Start collapsed by default so the widget is a small chip
+    // bottom-right; click the header to expand the per-feed list.
+    widget.className = "rcg-feed-status collapsed";
     widget.innerHTML = `
         <div class="rcg-feed-status-header rcg-fs-toggle">
             <span>Feeds</span>
