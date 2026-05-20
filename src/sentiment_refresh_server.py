@@ -1158,6 +1158,115 @@ def _build_data_box(ticker: str, fundamentals: dict) -> tuple[dict, list, str]:
     return data_box, yearly_eps, description
 
 
+# ─── v29.8 — Regime-aware best-model lookup ─────────────────────────────
+def build_regime_models(ticker: str, top_n: int = 5, min_n: int = 5) -> dict:
+    """Return top-N tournament models in the CURRENT REGIME by IC + their
+    latest scores for `ticker`. Powers the regime-aware best-model panel
+    in the dashboard dropdown.
+
+    Returns:
+      {
+        ticker, current_regime, models: [
+            {model, family, horizon, ic_dir, hit_rate, n,
+             latest_score, latest_run_ts, score_age_minutes}
+        ]
+      }
+    """
+    leaderboard_path = Path("/home/nixos/Prod/V1/outputs/leaderboard.json")
+    if not leaderboard_path.exists():
+        return {"ticker": ticker, "error": "leaderboard.json missing"}
+
+    lb = json.loads(leaderboard_path.read_text())
+    current_regime_label = (lb.get("current_regime") or {}).get("regime_label", "")
+    results = lb.get("results") or []
+
+    # Per-stock-eligible model families. Excludes macro-only signals
+    # (single-ticker variants like model_bollinger_pos_20_k25 that fire
+    # only on VIX/SPY). We only want stock-pickers here.
+    PERTICKER_FAMILIES = {
+        "bollinger_pos", "mean_reversion", "momentum", "rsi_extreme",
+        "sma_cross", "ema_cross", "donchian_break", "lr_slope", "arima",
+        "ensemble", "pattern", "cross_sectional", "meta_blend",
+    }
+
+    # Rank by IC within current regime (n >= min_n threshold for signal)
+    # AND total leaderboard n >= 100 to exclude macro-only single-ticker
+    # variants like bollinger_pos_20_k25 that fire only on VIX.
+    PERTICKER_MIN_TOTAL_N = 100
+    ranked = []
+    for r in results:
+        if r.get("family") not in PERTICKER_FAMILIES: continue
+        total_n = r.get("n") or 0
+        if total_n < PERTICKER_MIN_TOTAL_N: continue
+        br = (r.get("by_regime") or {}).get(current_regime_label, {})
+        if not br: continue
+        n = br.get("n") or 0
+        ic = br.get("ic_directional")
+        if n < min_n or ic is None: continue
+        ranked.append({
+            "model":     r.get("model"),
+            "family":    r.get("family"),
+            "horizon":   r.get("horizon"),
+            "ic_dir":    ic,
+            "hit_rate":  br.get("hit_rate"),
+            "n":         n,
+            "avg_score_abs": br.get("avg_score_abs"),
+        })
+    # Sort by IC desc (best predictors first)
+    ranked.sort(key=lambda x: -(x["ic_dir"] if x["ic_dir"] is not None else -2))
+    top_models = ranked[:top_n]
+
+    # Pull the latest score for each top model for this ticker
+    if top_models:
+        try:
+            import psycopg
+            score_names = [f"model_{m['model']}_score" for m in top_models]
+            with psycopg.connect("host=/run/postgresql user=nixos dbname=rcg_signals") as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT s.signal_name, s.signal_value, r.run_timestamp
+                          FROM signals s
+                          JOIN runs r ON s.run_id = r.run_id
+                         WHERE s.ticker = %s
+                           AND s.signal_name = ANY(%s)
+                           AND s.signal_value IS NOT NULL
+                         ORDER BY r.run_timestamp DESC
+                        """,
+                        (ticker.upper(), score_names),
+                    )
+                    rows = cur.fetchall()
+            # Group by signal_name → latest row
+            latest_per_signal = {}
+            for sname, val, ts in rows:
+                if sname not in latest_per_signal:
+                    latest_per_signal[sname] = (float(val), ts)
+            # Attach to models
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc)
+            for m in top_models:
+                key = f"model_{m['model']}_score"
+                if key in latest_per_signal:
+                    val, ts = latest_per_signal[key]
+                    age_min = int((now - ts).total_seconds() / 60) if ts else None
+                    m["latest_score"]     = round(val, 2)
+                    m["latest_run_ts"]    = ts.isoformat() if ts else None
+                    m["score_age_minutes"] = age_min
+                else:
+                    m["latest_score"]      = None
+                    m["latest_run_ts"]     = None
+                    m["score_age_minutes"] = None
+        except Exception as e:
+            print(f"  [WARN] regime_models latest-score lookup failed: {e}")
+
+    return {
+        "ticker":         ticker.upper(),
+        "current_regime": current_regime_label,
+        "n_models":       len(top_models),
+        "models":         top_models,
+    }
+
+
 # ─── HTTP handler ──────────────────────────────────────────────────────────
 CORS = {
     "Access-Control-Allow-Origin":  "*",
@@ -1226,6 +1335,24 @@ class RefreshHandler(BaseHTTPRequestHandler):
                     return
                 rep = build_report(ticker)
                 self._send_json(200, rep)
+            except Exception as e:
+                import traceback; traceback.print_exc()
+                self._send_json(500, {"error": str(e)})
+            return
+
+        # v29.8 — Regime-aware best-model endpoint.
+        # For a given ticker, returns the top-N tournament models in the
+        # CURRENT REGIME by directional IC, plus the latest score each
+        # model has emitted for this ticker. Powers the "Best model for
+        # current regime" panel in the dashboard dropdown.
+        if self.path.startswith("/regime_models/"):
+            try:
+                ticker = self.path.split("/")[-1].upper()
+                if not TICKER_RE.match(ticker):
+                    self._send_json(400, {"error": f"invalid ticker: {ticker!r}"})
+                    return
+                payload = build_regime_models(ticker)
+                self._send_json(200, payload)
             except Exception as e:
                 import traceback; traceback.print_exc()
                 self._send_json(500, {"error": str(e)})

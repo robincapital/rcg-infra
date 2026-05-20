@@ -1261,6 +1261,84 @@
     } catch (e) { return { error: e.message || String(e) }; }
   }
 
+  // v29.8 — Regime-aware best-model lookup
+  const REGIME_MODELS_BASE = 'http://rcg-nixos:8085/regime_models';
+  async function fetchRegimeModels(ticker) {
+    try {
+      const r = await fetch(`${REGIME_MODELS_BASE}/${ticker}`);
+      return await r.json();
+    } catch (e) { return { error: e.message || String(e) }; }
+  }
+  function renderRegimeModelsInto(el, ticker, d) {
+    if (!d || d.error) {
+      el.innerHTML = `<div class="empty" style="padding:0.5rem;font-size:11px;color:var(--red)">Regime-models unavailable: ${d?.error || 'no data'}</div>`;
+      return;
+    }
+    const models = d.models || [];
+    if (!models.length) {
+      el.innerHTML = `<div class="empty" style="padding:0.5rem;font-size:11px">No regime-specific model data yet for current regime <b>${d.current_regime}</b> (needs ≥5 obs per model).</div>`;
+      return;
+    }
+    const sigColor = (v) => {
+      if (v == null) return 'var(--dim)';
+      if (v >= 60)  return 'var(--green)';
+      if (v >= 25)  return '#86efac';
+      if (v <= -60) return 'var(--red)';
+      if (v <= -25) return '#fca5a5';
+      return 'var(--dim)';
+    };
+    const fmtAge = (m) => {
+      if (m == null) return '—';
+      if (m < 60) return m + 'm';
+      if (m < 1440) return (m/60).toFixed(1) + 'h';
+      return (m/1440).toFixed(1) + 'd';
+    };
+    const rows = models.map((m, i) => {
+      const ic = m.ic_dir != null ? (m.ic_dir >= 0 ? '+' : '') + m.ic_dir.toFixed(3) : '—';
+      const hr = m.hit_rate != null ? (m.hit_rate*100).toFixed(0)+'%' : '—';
+      const sc = m.latest_score;
+      const scStr = sc != null ? (sc >= 0 ? '+' : '') + sc.toFixed(1) : '<span style="color:var(--dim)">no fire</span>';
+      const dir  = sc != null ? (sc > 0 ? '▲ LONG' : (sc < 0 ? '▼ SHORT' : 'NEUTRAL')) : '';
+      return `<tr>
+        <td style="text-align:right;color:var(--dim);">${i+1}</td>
+        <td style="text-align:left;">${m.model}</td>
+        <td style="text-align:left;color:var(--dim);font-size:10px;">${m.family}/${m.horizon}</td>
+        <td style="text-align:right;color:${m.ic_dir > 0 ? 'var(--green)' : 'var(--red)'};">${ic}</td>
+        <td style="text-align:right;color:var(--dim);">${hr}</td>
+        <td style="text-align:right;color:var(--dim);">${m.n}</td>
+        <td style="text-align:right;color:${sigColor(sc)};font-weight:600;">${scStr}</td>
+        <td style="text-align:left;font-size:10px;color:${sigColor(sc)};">${dir}</td>
+        <td style="text-align:right;color:var(--dim);font-size:10px;">${fmtAge(m.score_age_minutes)}</td>
+      </tr>`;
+    }).join('');
+    el.innerHTML = `
+      <div style="margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid var(--border);">
+        <h4 style="margin:0 0 0.3rem 0;font-size:10px;color:var(--gold);text-transform:uppercase;letter-spacing:0.5px;">
+          Best Models for Current Regime &nbsp;<span style="color:var(--dim);font-weight:normal;">${d.current_regime || 'unknown'}</span>
+        </h4>
+        <table style="width:100%;border-collapse:collapse;font-size:11px;">
+          <thead>
+            <tr style="color:var(--dim);font-size:9.5px;text-transform:uppercase;letter-spacing:0.5px;">
+              <th style="text-align:right;width:24px;">#</th>
+              <th style="text-align:left;">Model</th>
+              <th style="text-align:left;">Family/Hz</th>
+              <th style="text-align:right;">IC</th>
+              <th style="text-align:right;">Hit</th>
+              <th style="text-align:right;">N</th>
+              <th style="text-align:right;">Latest Score</th>
+              <th style="text-align:left;">Signal</th>
+              <th style="text-align:right;">Age</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div style="font-size:9.5px;color:var(--dim);line-height:1.4;margin-top:4px;">
+          IC = directional correlation across the universe in the current regime. Latest Score is THIS ticker's most recent reading from each model.
+          Score &gt; +60 = strong long signal, &lt; -60 = strong short, |score| &lt; 25 = neutral.
+        </div>
+      </div>`;
+  }
+
   // ─── Per-ticker valuation report (📄 button → PDF) ───
   // Click fetches /report/<T>, populates the hidden #report-view panel, shows
   // it full-screen, and triggers window.print(). The print stylesheet hides
@@ -2953,6 +3031,11 @@
     const assumptionsPlaceholder =
       `<div id="${assumptionsId}" class="assumptions-panel">` +
       `<div class="empty" style="padding:0.5rem;font-size:11px">loading assumptions…</div></div>`;
+    // v29.8 — Regime-aware best-model panel placeholder
+    const regimeModelsId = `regime-models-${row.ticker}`;
+    const regimeModelsPlaceholder =
+      `<div id="${regimeModelsId}" class="regime-models-panel">` +
+      `<div class="empty" style="padding:0.5rem;font-size:11px">loading regime-best models…</div></div>`;
     // v29.4 — Company description (BBG CIE_DES) at top of dropdown when available
     const descBlock = row.description ? `
       <div style="background:var(--panel); border-left:3px solid var(--gold); padding:6px 12px;
@@ -2970,6 +3053,7 @@
       ${levels}
       ${catalysts}
       ${assumptionsPlaceholder}
+      ${regimeModelsPlaceholder}
       <div style="margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid var(--border);">
         <h4 style="margin:0 0 0.3rem 0;font-size:10px;color:var(--gold);text-transform:uppercase;letter-spacing:0.5px;">
           Prediction History (last ${PREDICTION_HISTORY_HOURS}h, captured every 30 min)</h4>
@@ -3249,6 +3333,13 @@ Signal: ${m.insSignal ?? 'neutral'}`;
       if (!el || el.dataset.loaded === '1') return;
       el.dataset.loaded = '1';
       fetchAssumptions(ticker).then(d => renderAssumptionsPanelInto(el, ticker, d));
+    });
+    // v29.8 — Lazy-load the per-ticker Regime-Best-Models panel
+    expanded.forEach(ticker => {
+      const el = document.getElementById(`regime-models-${ticker}`);
+      if (!el || el.dataset.loaded === '1') return;
+      el.dataset.loaded = '1';
+      fetchRegimeModels(ticker).then(d => renderRegimeModelsInto(el, ticker, d));
     });
     const counts = rows.reduce((acc, r) => {
       const k = r.action?.l || 'NOISE';
