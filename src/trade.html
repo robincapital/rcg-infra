@@ -3139,6 +3139,14 @@
       const badge = dominantModel && MODEL_BADGE_STYLES[dominantModel]
         ? `<span style="display:inline-block;background:${MODEL_BADGE_STYLES[dominantModel].bg};color:${MODEL_BADGE_STYLES[dominantModel].fg};padding:1px 4px;border-radius:2px;font-size:8.5px;font-weight:700;letter-spacing:0.3px;margin-left:4px;vertical-align:1px;" title="Dominant valuation model: ${dominantModel}">${MODEL_BADGE_STYLES[dominantModel].label}</span>`
         : '';
+      // v29.6 — EPS-decay warning chip. Shown when TTM EPS is negative AND
+      // more negative than year-ago TTM (recent decay). The Emerging Growth
+      // model would have been blocked when this fires; for TAM-active names
+      // it's purely a flag (MM explicitly opted them in).
+      const epsDecay = ptDetail?.eps_decay_warning === true;
+      const decayChip = epsDecay
+        ? `<span style="display:inline-block;background:#ef4444;color:#fff;padding:1px 4px;border-radius:2px;font-size:8.5px;font-weight:700;letter-spacing:0.3px;margin-left:3px;vertical-align:1px;" title="TTM EPS is negative AND deteriorating year-over-year. Growth-projection models suppressed. Conventional valuation only.">⚠EPS</span>`
+        : '';
       html.push(`
         <tr>
           <td class="neutral">${m.rank ?? i+1}</td>
@@ -3148,7 +3156,7 @@
           <td class="neutral">${fmtPx(m.eod)}</td>
           <td>${fmtPx(m.livePx)}</td>
           <td class="${moveClass(m.move)}">${fmtPct(m.move)}</td>
-          <td class="neutral ${userPT != null ? 'pt-user-overridden' : ''}" title="${ptTitle}">${assumptionDot(m.ticker)}${fmtPx(displayPT)}${badge}${convictionBadge(convScore)}</td>
+          <td class="neutral ${userPT != null ? 'pt-user-overridden' : ''}" title="${ptTitle}">${assumptionDot(m.ticker)}${fmtPx(displayPT)}${badge}${decayChip}${convictionBadge(convScore)}</td>
           <td class="${upsideCls}">${fmtPct(displayUps)}</td>
           <td>${m.rsi == null ? '—' : m.rsi.toFixed(0)}</td>
           <td>${m.volRatio == null ? '—' : m.volRatio.toFixed(2)+'x'}</td>

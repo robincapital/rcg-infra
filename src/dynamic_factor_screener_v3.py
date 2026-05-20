@@ -1328,6 +1328,9 @@ def screen_stocks(sf1, equity_prices, adr_tickers=None, biotech_tickers=None,
         revenue = tk["revenue"].to_list() if "revenue" in tk.columns else []
         ebitda = tk["ebitda"].to_list() if "ebitda" in tk.columns else []
         debt = tk["debt"].to_list() if "debt" in tk.columns else []
+        # v29.6 — EPS series for the EPS-decay gate in compute_target_price
+        eps_series_for_pt = (tk["epsdil"].to_list() if "epsdil" in tk.columns
+                              else (tk["eps"].to_list() if "eps" in tk.columns else []))
 
         if "fcf" in tk.columns:
             fcf = tk["fcf"].to_list()
@@ -1450,6 +1453,7 @@ def screen_stocks(sf1, equity_prices, adr_tickers=None, biotech_tickers=None,
                 sector=ticker_sector,
                 growth_overrides=_growth_ov,
                 tam_overrides=_tam_ov,
+                eps_series=eps_series_for_pt,   # v29.6 — EPS-decay gate
             )
             internal_tp = _r.target_price
             internal_pt_detail = _r.to_pt_detail()

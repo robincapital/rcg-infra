@@ -157,6 +157,9 @@ class TargetPriceResult:
             "emerging":           b.get("emerging", False),
             "pt_source":          self.pt_source,
             "divergence_flag":    self.divergence_flag,
+            # v29.6 — EPS-decay flag surfaces in the dashboard model-driver chip
+            # so MM sees when a name is anchored on a decaying business
+            "eps_decay_warning":  b.get("eps_decay_warning", False),
         }
 
 
@@ -601,6 +604,7 @@ def compute_target_price(
     apply_envelope:         bool       = True,
     growth_overrides:       Optional[dict] = None,
     tam_overrides:          Optional[dict] = None,
+    eps_series:             Optional[Sequence] = None,
 ) -> TargetPriceResult:
     """
     Compute multi-model conviction-weighted price target with all RCG guardrails.
@@ -676,11 +680,38 @@ def compute_target_price(
     trailing_ann_rev = (rev_raw[-1] * 4) if (rev_raw and rev_raw[-1] is not None) else 0
     is_subscale = trailing_ann_rev < EMERGING_MAX_TRAILING_REVENUE
 
-    emerging = is_emerging and is_clean_balance_sheet and is_subscale
+    # v29.6 — EPS-decay gate. The Emerging Growth model assumes revenue
+    # growth eventually translates into operating leverage. If a company
+    # has been deeply unprofitable for years AND it's getting WORSE, the
+    # growth thesis is broken; cost structure is blowing up faster than
+    # the top line. We don't want to reward that with an inflated PT.
+    #
+    # Logic: compare TTM EPS (sum of last 4 quarters) to TTM EPS from
+    # 4 quarters earlier. If recent TTM is negative AND more negative
+    # than year-ago TTM, block Emerging Growth.
+    is_eps_decaying = False
+    if eps_series and len(eps_series) >= 8:
+        eps_clean = [float(e) for e in eps_series
+                     if e is not None and not (isinstance(e, float) and np.isnan(e))]
+        if len(eps_clean) >= 8:
+            ttm_recent = sum(eps_clean[-4:])
+            ttm_yago   = sum(eps_clean[-8:-4])
+            is_eps_decaying = (ttm_recent < 0) and (ttm_recent < ttm_yago)
+
+    emerging = is_emerging and is_clean_balance_sheet and is_subscale and not is_eps_decaying
     if is_emerging and is_clean_balance_sheet and not is_subscale:
         result.gates_fired.append(
             f"EMERGING_GROWTH_SUPPRESSED_AT_SCALE:ann_rev=${trailing_ann_rev/1e9:.1f}B"
         )
+    if is_emerging and is_clean_balance_sheet and is_subscale and is_eps_decaying:
+        # Surface for the dashboard so MM sees why emerging was blocked
+        result.gates_fired.append("EMERGING_BLOCKED_EPS_DECAY")
+
+    # Tag the result so the report panel can show an EPS-decay warning
+    # on TAM-active names too (we DON'T block TAM since MM explicitly set
+    # it; just flag it visually).
+    if is_eps_decaying:
+        result.breakdown["eps_decay_warning"] = True
 
     result.quality_score = quality
 

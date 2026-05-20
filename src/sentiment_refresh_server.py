@@ -279,6 +279,7 @@ def compute_pt_payload(ticker: str, overrides: dict | None,
         marketcap=f["marketcap"], last_price=live_price,
         cash_on_hand=f["cash_on_hand"], sector=f.get("sector"),
         shares_diluted=f.get("shares_diluted"),
+        eps_series=f.get("eps_series"),   # v29.6 — for EPS-decay gate
     )
     r_default = compute_target_price(**_kw)
 

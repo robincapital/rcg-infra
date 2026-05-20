@@ -955,6 +955,7 @@ def run_analysis(ticker):
     marketcap_s = safe_col("marketcap")
     cash_s      = safe_col("cashnequsd")
     shares_s    = safe_col("shareswadil") or safe_col("shareswa")
+    eps_series_for_pt = safe_col("epsdil") or safe_col("eps")   # v29.6 — EPS-decay gate
     # v28.6 — new fields surfaced on the data box
     divyield_s  = safe_col("divyield")     # null for non-payers
 
@@ -1137,6 +1138,7 @@ def run_analysis(ticker):
             apply_envelope   = True,
             growth_overrides = _user_overrides,
             tam_overrides    = _user_tam,
+            eps_series       = eps_series_for_pt,   # v29.6 — EPS-decay gate
         )
         internal_target    = _res.target_price
         pt_model_breakdown = _res.breakdown.get("models", {})

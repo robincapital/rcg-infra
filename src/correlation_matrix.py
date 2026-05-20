@@ -36,33 +36,22 @@ import polars as pl
 import numpy as np
 
 # ─── Cross-asset basket ────────────────────────────────────────────────────
+# v29.7 — MM directive: narrow to 8 ETFs covering the main asset classes
+# without the sector/credit clutter that crowded the heatmap.
+#   Equity:  SPY, EFA, EEM    (US, developed intl, EM)
+#   Rates:   IEF              (10y treasuries — duration proxy)
+#   Vol:     VXX              (VIX futures — risk-off proxy)
+#   FX:      UUP              (USD index)
+#   Commod:  GLD, USO         (gold, oil — defensive vs cyclical)
 BASKET = [
-    # Equity
     ("SPY", "S&P 500"),
-    ("QQQ", "Nasdaq 100"),
-    ("IWM", "Russell 2000"),
     ("EFA", "Developed intl"),
     ("EEM", "Emerging mkts"),
-    # Sectors
-    ("XLK", "Tech sector"),
-    ("XLE", "Energy sector"),
-    ("XLF", "Financials"),
-    ("XLV", "Healthcare"),
-    # Treasuries
-    ("TLT", "20y+ treasuries"),
     ("IEF", "10y treasuries"),
-    # Credit
-    ("HYG", "High-yield credit"),
-    ("LQD", "IG credit"),
-    # Commodities
+    ("VXX", "VIX futures"),
     ("GLD", "Gold"),
-    ("SLV", "Silver"),
     ("USO", "Oil"),
-    ("DBC", "Broad commodities"),
-    # Currency
     ("UUP", "USD index"),
-    # Volatility
-    ("VXX", "VIX futures (short-term)"),
 ]
 
 # Sharadar SEP = stocks; SFP = ETFs/funds. Our cross-asset basket is ETFs,
