@@ -196,6 +196,12 @@ _TAM_OVERRIDE_KEYS = (
     "fcf_margin_pct",
 )
 
+# v32 — per-ticker price-target blend (Change F). Lets the MM pin a single
+# valuation model OR set custom blend weights, stored per ticker in
+# user_assumptions.json under the "pt_blend" key and passed straight to
+# price_targets.compute_target_price(pt_blend=...).
+_PT_BLEND_MODELS = ("ev_ebitda", "ev_rev", "fcf_yield", "emerging_growth", "tam", "dcf")
+
 
 def load_assumptions() -> dict:
     if not ASSUMPTIONS_PATH.exists():
@@ -211,12 +217,14 @@ def save_assumptions(data: dict) -> None:
 
 
 def compute_pt_payload(ticker: str, overrides: dict | None,
-                        tam_overrides: dict | None = None) -> dict:
+                        tam_overrides: dict | None = None,
+                        pt_blend: dict | None = None) -> dict:
     """
     Fetch fundamentals + run the PT engine with `overrides` (growth
-    sliders) and `tam_overrides` (TAM model inputs), return a JSON payload
-    with the engine baseline, the user overrides, and the resulting PT
-    + per-model breakdown. Used by GET /assumptions/<T> and POST.
+    sliders), `tam_overrides` (TAM model inputs), and `pt_blend` (v32 —
+    pin a model / custom blend weights), return a JSON payload with the
+    engine baseline, the user overrides, and the resulting PT + per-model
+    breakdown. Used by GET /assumptions/<T> and POST.
     """
     # Imported lazily so the server starts even if polars/parquet not present
     import sys
@@ -289,14 +297,20 @@ def compute_pt_payload(ticker: str, overrides: dict | None,
         tam_overrides and any(tam_overrides.get(k) is not None for k in _TAM_OVERRIDE_KEYS)
     ) else None
 
+    # v32 — pt_blend (pin/weights). Only engage when it carries an active mode.
+    blend = pt_blend if (pt_blend and (pt_blend.get("mode") or "").lower()
+                         in ("pin", "weights")) else None
+
     r_user = None
     has_growth = overrides and any(v is not None for v in overrides.values())
-    if has_growth or tam_dict:
+    if has_growth or tam_dict or blend:
         kw_user = dict(_kw)
         if has_growth:
             kw_user["growth_overrides"] = overrides
         if tam_dict:
             kw_user["tam_overrides"] = tam_dict
+        if blend:
+            kw_user["pt_blend"] = blend
         r_user = compute_target_price(**kw_user)
 
     return {
@@ -308,6 +322,7 @@ def compute_pt_payload(ticker: str, overrides: dict | None,
         "baseline":        base,
         "overrides":       overrides or {k: None for k in _OVERRIDE_KEYS},
         "tam_overrides":   tam_dict or {k: None for k in _TAM_OVERRIDE_KEYS},
+        "pt_blend":        blend,   # v32 — null when no active pin/weights
         "pt_engine_default": {
             "target_price":  r_default.target_price,
             "upside_pct":    round(r_default.upside_pct * 100, 2) if r_default.upside_pct is not None else None,
@@ -370,6 +385,44 @@ def sanitize_tam_overrides(raw: dict) -> dict:
         except (TypeError, ValueError):
             out[k] = None
     return out
+
+
+def sanitize_pt_blend(raw) -> dict | None:
+    """v32 — Validate a price-target blend spec. Returns a normalized dict the
+    engine accepts, or None when the input is empty / 'off' / invalid.
+
+    Accepted shapes:
+        {"mode": "pin",     "model": "<model>"}
+        {"mode": "weights", "weights": {"<model>": <float>, ...}}
+        {"mode": "off"} / None  → cleared (returns None)
+    Only known model keys (_PT_BLEND_MODELS) are kept; weights must be > 0.
+    """
+    if not isinstance(raw, dict):
+        return None
+    mode = (raw.get("mode") or "").strip().lower()
+    if mode in ("", "off", "auto", "none"):
+        return None
+    if mode == "pin":
+        model = raw.get("model")
+        if model in _PT_BLEND_MODELS:
+            return {"mode": "pin", "model": model}
+        return None
+    if mode == "weights":
+        w = raw.get("weights")
+        if not isinstance(w, dict):
+            return None
+        clean = {}
+        for k, v in w.items():
+            if k not in _PT_BLEND_MODELS or v is None:
+                continue
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                continue
+            if fv > 0:
+                clean[k] = round(fv, 4)
+        return {"mode": "weights", "weights": clean} if clean else None
+    return None
 
 
 # ─── Refresh runner ────────────────────────────────────────────────────────
@@ -849,7 +902,8 @@ def build_report(ticker: str) -> dict:
     stored = all_a.get(ticker) or {}
     overrides = stored.get("overrides")
     tam_ov   = stored.get("tam")
-    pt_payload = compute_pt_payload(ticker, overrides, tam_ov)
+    pt_blend = stored.get("pt_blend")
+    pt_payload = compute_pt_payload(ticker, overrides, tam_ov, pt_blend)
     if pt_payload.get("error"):
         return {"ticker": ticker, "error": pt_payload["error"]}
 
@@ -1318,7 +1372,8 @@ class RefreshHandler(BaseHTTPRequestHandler):
                 stored = all_a.get(ticker) or {}
                 overrides = stored.get("overrides")
                 tam_ov   = stored.get("tam")
-                payload = compute_pt_payload(ticker, overrides, tam_ov)
+                pt_blend = stored.get("pt_blend")
+                payload = compute_pt_payload(ticker, overrides, tam_ov, pt_blend)
                 payload["updated_at"]  = stored.get("updated_at")
                 payload["llm_summary"] = stored.get("llm_summary")
                 payload["llm_rating"]  = stored.get("llm_rating")
@@ -1367,16 +1422,24 @@ class RefreshHandler(BaseHTTPRequestHandler):
                 all_a = load_assumptions()
                 summary = {}
                 for t, rec in all_a.items():
-                    ov = rec.get("overrides") or {}
-                    if not any(v is not None for v in ov.values()):
+                    ov  = rec.get("overrides") or {}
+                    tam = rec.get("tam") or {}
+                    bl  = rec.get("pt_blend")
+                    growth_any = any(v is not None for v in ov.values())
+                    tam_any    = any(v is not None for v in tam.values())
+                    blend_any  = bool(bl and (bl.get("mode") or "").lower() in ("pin", "weights"))
+                    # Surface any ticker the MM has customized — growth, TAM, or blend
+                    if not (growth_any or tam_any or blend_any):
                         continue
                     try:
-                        pt_payload = compute_pt_payload(t, ov)
+                        pt_payload = compute_pt_payload(t, ov, tam, bl)
                         u = (pt_payload.get("pt_with_overrides") or {})
                         e_pt = (pt_payload.get("pt_engine_default") or {}).get("target_price")
                         summary[t] = {
                             "updated_at":   rec.get("updated_at"),
                             "n_overrides":  sum(1 for v in ov.values() if v is not None),
+                            "has_tam":      tam_any,
+                            "pt_blend":     bl if blend_any else None,
                             "user_pt":      u.get("target_price"),
                             "engine_pt":    e_pt,
                             "upside_pct":   u.get("upside_pct"),
@@ -1438,6 +1501,46 @@ class RefreshHandler(BaseHTTPRequestHandler):
 
     # ─── POST ───────────────────────────────────────────────────────
     def do_POST(self):
+        # v34 — BBG Start-of-Day manual trigger (dashboard button).
+        # SSHes to the Windows BBG host and fires the start-of-day Task Scheduler
+        # entry, then returns the resulting heartbeat. Idempotent; safe to call
+        # repeatedly (the script itself skips a restart when the stream is healthy).
+        if self.path == "/bbg-start-of-day":
+            try:
+                import subprocess as _sp
+                # 1. Trigger the Windows scheduled task
+                r = _sp.run(
+                    ["ssh", "-o", "StrictHostKeyChecking=no",
+                     "-o", "ConnectTimeout=10",
+                     "ndiaz@100.86.90.78",
+                     "schtasks /run /TN \"RCG-BBG-StartOfDay\""],
+                    capture_output=True, text=True, timeout=30,
+                )
+                trigger_ok = (r.returncode == 0)
+                trigger_msg = (r.stdout or r.stderr or "").strip()
+                # 2. Give the Windows script ~6s to probe BBG + write heartbeat + SCP back
+                import time as _time
+                _time.sleep(7)
+                # 3. Read whichever heartbeat is freshest (the SCP'd copy)
+                hb_path = Path("/home/nixos/Prod/V1/outputs/bbg_heartbeat.json")
+                if hb_path.exists():
+                    try:
+                        heartbeat = json.loads(hb_path.read_text())
+                    except Exception:
+                        heartbeat = {"error": "heartbeat file unreadable"}
+                else:
+                    heartbeat = {"error": "no heartbeat file yet"}
+                self._send_json(200 if trigger_ok else 502, {
+                    "trigger_ok":  trigger_ok,
+                    "trigger_msg": trigger_msg[:300],
+                    "heartbeat":   heartbeat,
+                })
+            except _sp.TimeoutExpired:
+                self._send_json(504, {"error": "SSH to Windows timed out (10s)"})
+            except Exception as e:
+                self._send_json(500, {"error": f"{type(e).__name__}: {e}"})
+            return
+
         if self.path.startswith("/assumptions/"):
             try:
                 ticker = self.path.split("/")[-1].upper()
@@ -1460,8 +1563,15 @@ class RefreshHandler(BaseHTTPRequestHandler):
                 tam_any = any(v is not None for v in tam_overrides.values())
                 growth_any = any(v is not None for v in overrides.values())
 
-                # Reject if NEITHER growth nor TAM provided — use DELETE to clear
-                if not growth_any and not tam_any:
+                # v32 — pt_blend (pin / custom weights). Presence of the key
+                # (even an "off" payload) is an explicit instruction to set or
+                # clear the blend; absence preserves whatever was stored.
+                blend_present = "pt_blend" in body
+                pt_blend = sanitize_pt_blend(body.get("pt_blend")) if blend_present else None
+                blend_active = pt_blend is not None
+
+                # Reject only if the POST carries NO actionable field at all.
+                if not growth_any and not tam_any and not blend_present:
                     self._send_json(400, {"error": "no overrides provided; use DELETE to clear"})
                     return
 
@@ -1474,10 +1584,14 @@ class RefreshHandler(BaseHTTPRequestHandler):
                                                                    or {k: None for k in _OVERRIDE_KEYS})
                     merged_tam    = tam_overrides if tam_any else (prev.get("tam")
                                                                     or {k: None for k in _TAM_OVERRIDE_KEYS})
+                    # pt_blend: if the key was sent, honor it (pin/weights or
+                    # None to clear); otherwise preserve the stored blend.
+                    merged_blend  = pt_blend if blend_present else prev.get("pt_blend")
                     # New overrides invalidate any cached LLM summary
                     all_a[ticker] = {
                         "overrides":   merged_growth,
                         "tam":         merged_tam,
+                        "pt_blend":    merged_blend,
                         "updated_at":  datetime.now(timezone.utc).isoformat(),
                         "llm_summary": None,
                         "llm_rating":  None,
@@ -1485,11 +1599,11 @@ class RefreshHandler(BaseHTTPRequestHandler):
                     save_assumptions(all_a)
 
                 # Recompute PT with the new overrides and return it
-                payload = compute_pt_payload(ticker, merged_growth, merged_tam)
+                payload = compute_pt_payload(ticker, merged_growth, merged_tam, merged_blend)
                 payload["updated_at"]  = all_a[ticker]["updated_at"]
                 payload["llm_summary"] = None
                 payload["llm_rating"]  = None
-                print(f"[assumptions] +{ticker} growth={overrides} tam={tam_overrides}")
+                print(f"[assumptions] +{ticker} growth={overrides} tam={tam_overrides} blend={merged_blend}")
                 self._send_json(200, payload)
             except Exception as e:
                 self._send_json(500, {"error": str(e)})

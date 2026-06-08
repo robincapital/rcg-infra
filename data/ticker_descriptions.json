@@ -5,11 +5,95 @@
     "manual": false,
     "name_at_gen": "APPLE INC"
   },
+  "AMZN": {
+    "desc": "Amazon operates e-commerce platforms, cloud computing services (AWS), digital streaming, and advertising networks globally.",
+    "generated_at": "2026-05-19",
+    "manual": false,
+    "name_at_gen": "AMAZON COM INC"
+  },
+  "BYND": {
+    "desc": "Beyond Meat, Inc. develops plant based protein food products. The Company offers burgers, sausage, crumbles, strips, and other related products. Beyond Meat serves customers in the United States.",
+    "generated_at": "2026-06-02",
+    "manual": false,
+    "source": "bbg"
+  },
+  "CRWD": {
+    "desc": "CrowdStrike provides cloud-based endpoint protection, threat intelligence, and incident response services to detect and prevent cyberattacks.",
+    "generated_at": "2026-05-19",
+    "manual": false,
+    "name_at_gen": "CROWDSTRIKE HOLDINGS INC"
+  },
+  "EVER": {
+    "desc": "EverQuote, Inc. operates as an internet based marketing firm. The Company, through its platform, enables consumers to connect with auto insurance carriers and agents to meet their auto insurance needs. EverQuote serves customers in the United States.",
+    "generated_at": "2026-05-20",
+    "manual": false,
+    "source": "bbg"
+  },
+  "GAME": {
+    "desc": "GameSquare Holdings, Inc. operates as a holding company. The Company, through its subsidiaries, provides end-to-end platform comprising media, esports, creative content, and technology assets. GameSquare Holdings serves customers worldwide.",
+    "generated_at": "2026-05-29",
+    "manual": false,
+    "source": "bbg"
+  },
+  "IBM": {
+    "desc": "International Business Machines Corp operates as an IT services and consulting company. The Company, through its platform, offers analytics, IT infrastructure, cloud, business operations and automations, cybersecurity, data storage, application development, asset management, blockchain, software, and consulting solutions. International Business Machines serves clients worldwide.",
+    "generated_at": "2026-05-21",
+    "manual": false,
+    "source": "bbg"
+  },
+  "INOD": {
+    "desc": "Innodata Inc. operates as a data engineering company. The Company provides a range of business process, technology, and consulting services to assist clients in setting digital content production and product strategies. Innodata serves agriculture, energy, media, consumer products, manufacturing, transportation, banking, and financial sectors in the United States.",
+    "generated_at": "2026-05-19",
+    "manual": false,
+    "source": "bbg"
+  },
+  "IONQ": {
+    "desc": "IonQ builds quantum computers and provides cloud-based quantum computing services for enterprise and research applications.",
+    "generated_at": "2026-05-19",
+    "manual": false,
+    "name_at_gen": "IONQ INC"
+  },
+  "META": {
+    "desc": "Meta operates Facebook, Instagram, WhatsApp, and other platforms enabling user communication, content sharing, and digital advertising globally.",
+    "generated_at": "2026-05-19",
+    "manual": false,
+    "name_at_gen": "META PLATFORMS INC"
+  },
+  "MRLN": {
+    "desc": "Merlin Inc. is an aerospace and defense technology company. The Company develops AI-powered autonomous flight systems for national security and civil aviation sectors. Merlin operates globally.",
+    "generated_at": "2026-05-28",
+    "manual": false,
+    "source": "bbg"
+  },
   "NVDA": {
     "desc": "NVIDIA designs and sells GPUs and AI processors for gaming, data centers, and autonomous vehicles.",
     "generated_at": "2026-05-19",
     "manual": false,
     "name_at_gen": "NVIDIA CORP"
+  },
+  "PLTR": {
+    "desc": "Palantir develops data integration and analysis software platforms that help organizations consolidate, manage, and derive insights from large, disparate datasets.",
+    "generated_at": "2026-05-19",
+    "manual": false,
+    "name_at_gen": "PALANTIR TECHNOLOGIES INC"
+  },
+  "PTON": {
+    "desc": "Peloton Interactive, Inc. provides sporting apparels and products. The Company offers tops, bras, bottoms, watch bands, hats, bags, and workout bikes for indoor cycling products. Peloton Interactive serves customers worldwide.",
+    "generated_at": "2026-06-02",
+    "manual": false,
+    "source": "bbg"
+  },
+  "QBTS": {
+    "desc": "D-Wave Quantum Inc. provides computer and hardware products. The Company offers quantum computing systems, software, developer tools, and services to enterprises, governments, laboratories, and financial institutions. D-Wave Quantum serves customers worldwide.",
+    "generated_at": "2026-05-28",
+    "manual": false,
+    "source": "bbg"
+  },
+  "RBRK": {
+    "desc": "Rubrik, Inc. operates as a cloud data management and data security company. The Company offers a platform which helps enterprises to achieve resilience against cyber-attacks, malicious insiders, operational disruptions, cloud mobility, and regulatory compliance. Rubrik serves government, health care, education, legal, and financial industries worldwide.",
+    "generated_at": "2026-05-19",
+    "manual": false,
+    "source": "bbg"
   },
   "RKLB": {
     "desc": "Rocket Lab designs and manufactures small-lift launch vehicles and provides satellite launch services to commercial and government customers.",
@@ -22,5 +106,41 @@
     "generated_at": "2026-05-19",
     "manual": false,
     "name_at_gen": "SOFI TECHNOLOGIES INC"
+  },
+  "TEM": {
+    "desc": "Tempus AI, Inc. provides AI-enabled precision medicine solutions. The Company develops intelligent diagnostics through the practical application of artificial intelligence in healthcare to make laboratory tests and connects laboratory results to a patient's own clinical data. Tempus AI conducts its business in the United States.",
+    "generated_at": "2026-05-28",
+    "manual": false,
+    "source": "bbg"
+  },
+  "TER": {
+    "desc": "Teradyne designs and manufactures automated test equipment for semiconductors, electronics, and industrial applications.",
+    "generated_at": "2026-05-19",
+    "manual": false,
+    "name_at_gen": "TERADYNE INC"
+  },
+  "TSLA": {
+    "desc": "Tesla manufactures electric vehicles and develops battery storage systems and solar energy products.",
+    "generated_at": "2026-05-19",
+    "manual": false,
+    "name_at_gen": "TESLA INC"
+  },
+  "VISN": {
+    "desc": "Vistance Networks, Inc. operates as a communication service provider company. The Company provides connectivity and cable solutions such as hybrid fiber-coaxial, switching infrastructure, cloud-managed platforms, and broadband network products for global environments. Vistance Networks serves customers worldwide.",
+    "generated_at": "2026-05-19",
+    "manual": false,
+    "source": "bbg"
+  },
+  "VSAT": {
+    "desc": "Viasat, Inc. operates as a communication company. The Company offers broadband digital satellite communications and wireless networking services, as well as provides satellite communications products such as network control systems and information distribution systems, modems, terminals, and simulation test equipment. Viasat serves customers worldwide.",
+    "generated_at": "2026-05-28",
+    "manual": false,
+    "source": "bbg"
+  },
+  "WULF": {
+    "desc": "TeraWulf, Inc. was formed to own and operate fully integrated environmentally clean bitcoin mining facilities in the United States. TeraWulf will generate domestically produced bitcoin powered by nuclear, hydro and solar energy.",
+    "generated_at": "2026-05-19",
+    "manual": false,
+    "source": "bbg"
   }
 }

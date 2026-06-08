@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RCG Markout Dashboard v32</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<link rel="stylesheet" href="markouts_v32.css">
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     GRID VIEW (default — shown when URL has no ?model= param)
+     ═══════════════════════════════════════════════════════════════════ -->
+<div id="grid-view" class="view">
+
+  <header class="page-header">
+    <div class="title-block">
+      <h1>Markout Dashboard <span class="version">v32</span></h1>
+      <div class="subtitle">Robin Capital Group — Tournament model evaluation</div>
+    </div>
+    <div class="header-meta">
+      <div id="generated-at">Loading…</div>
+      <div class="lookback-pill" id="lookback-pill">—</div>
+      <button id="btn-refresh" class="btn-primary" title="Re-read markouts.json">↻ Refresh</button>
+    </div>
+  </header>
+
+  <!-- Trade rules + cost banner -->
+  <div class="info-banner" id="trade-rules-banner">
+    <div><strong>Strategy:</strong> Long ≥+60 / Short ≤−60 · Exit |score|&lt;35 · Max 15 concurrent · Equal-weight · RTH only</div>
+    <div><strong>Costs:</strong> 5 bps/yr platform + <span id="slip-bps">5 bps</span>/side slippage · <strong>Metrics window:</strong> <span id="metrics-window">—</span></div>
+  </div>
+
+  <!-- Quick stats -->
+  <div class="quick-stats" id="quick-stats">
+    <!-- populated by JS -->
+  </div>
+
+  <!-- Champion board -->
+  <div class="champion-board" id="champion-board">
+    <div class="section-header">
+      <h2>🏆 Champion Board</h2>
+      <div class="section-note">Top 5 by current win streak → return → Sharpe</div>
+    </div>
+    <div class="champion-grid" id="champion-grid"></div>
+  </div>
+
+  <!-- Filter toolbar -->
+  <div class="filter-toolbar">
+    <div class="filter-row">
+      <div class="filter-group">
+        <label>🔍 Search</label>
+        <input type="text" id="search-input" placeholder="Model name…" autocomplete="off">
+      </div>
+      <div class="filter-group">
+        <label>Strategy Type</label>
+        <select id="family-filter">
+          <option value="all">All Types</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>Slippage</label>
+        <select id="slippage-filter">
+          <option value="0bps">0 bps</option>
+          <option value="5bps" selected>5 bps</option>
+          <option value="10bps">10 bps</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>Sort by</label>
+        <select id="sort-filter">
+          <option value="streak">Win streak</option>
+          <option value="return">Return</option>
+          <option value="sharpe">Sharpe</option>
+          <option value="hit_rate">Hit rate</option>
+          <option value="n_trades">Trade count</option>
+          <option value="best_trade">Best trade</option>
+        </select>
+      </div>
+    </div>
+    <div class="filter-row tier-row">
+      <span class="tier-label">Performance tier:</span>
+      <button class="tier-btn active" data-tier="all">All</button>
+      <button class="tier-btn" data-tier="hot">🔥 Hot</button>
+      <button class="tier-btn" data-tier="warm">⚠️ Warm</button>
+      <button class="tier-btn" data-tier="cold">❄️ Cold</button>
+      <button class="tier-btn" data-tier="gray">○ Insufficient</button>
+      <label class="cb-label">
+        <input type="checkbox" id="filter-champions"> ★ Champions only
+      </label>
+      <label class="cb-label">
+        <input type="checkbox" id="filter-has-trades" checked> n ≥ 10 trades
+      </label>
+      <div class="filter-summary" id="filter-summary">Showing 0 of 0</div>
+    </div>
+  </div>
+
+  <!-- Model card grid -->
+  <div class="model-grid" id="model-grid">
+    <!-- populated by JS -->
+  </div>
+
+  <footer class="grid-footer">
+    <div>Click any card to open the model's detail page in a new tab.</div>
+    <div>Data source: <code>/outputs/markouts.json</code></div>
+  </footer>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     DETAIL VIEW (shown when URL has ?model=<stem>)
+     ═══════════════════════════════════════════════════════════════════ -->
+<div id="detail-view" class="view" style="display:none">
+
+  <header class="page-header">
+    <div class="title-block">
+      <h1 id="detail-model-name">model_name</h1>
+      <div class="subtitle" id="detail-description">—</div>
+    </div>
+    <div class="header-meta">
+      <a href="markouts.html" class="btn-secondary back-link">← All models</a>
+      <button id="btn-refresh-detail" class="btn-primary">↻ Refresh</button>
+    </div>
+  </header>
+
+  <!-- Methodology card -->
+  <div class="info-banner" id="detail-methodology">
+    <div><strong>What it captures:</strong> <span id="detail-what"></span></div>
+    <div><strong>Entry:</strong> <span id="detail-entry"></span></div>
+    <div><strong>Exit:</strong> <span id="detail-exit"></span></div>
+  </div>
+
+  <!-- Detail badges row -->
+  <div class="detail-badges" id="detail-badges">
+    <!-- populated -->
+  </div>
+
+  <!-- Key metrics grid -->
+  <div class="detail-metrics" id="detail-metrics">
+    <!-- populated -->
+  </div>
+
+  <!-- Rolling Sharpe + Streak strip -->
+  <div class="detail-strip" id="detail-strip">
+    <!-- populated -->
+  </div>
+
+  <!-- Equity chart -->
+  <div class="chart-block">
+    <div class="chart-title">Equity Curve <span class="chart-note" id="chart-window">— window</span></div>
+    <div id="chart-equity" style="height:300px"></div>
+  </div>
+
+  <!-- Per-trade table -->
+  <div class="trade-section">
+    <div class="section-header">
+      <h2>Trade Details (<span id="trade-count">0</span>)</h2>
+      <div class="trade-filter-bar">
+        <button class="trade-filter-btn active" data-tf="all">All</button>
+        <button class="trade-filter-btn" data-tf="long">Longs</button>
+        <button class="trade-filter-btn" data-tf="short">Shorts</button>
+        <button class="trade-filter-btn" data-tf="wins">Winners</button>
+        <button class="trade-filter-btn" data-tf="losses">Losers</button>
+      </div>
+    </div>
+    <div class="trade-table-scroll">
+      <table id="trade-table" class="trade-table">
+        <thead>
+          <tr>
+            <th data-tc="exit_time" class="sortable">Exit Time</th>
+            <th data-tc="ticker"    class="sortable">Ticker</th>
+            <th data-tc="direction" class="sortable">Dir</th>
+            <th data-tc="entry_score" class="sortable numeric">Score Entry</th>
+            <th data-tc="exit_score"  class="sortable numeric">Score Exit</th>
+            <th data-tc="entry_price" class="sortable numeric">Entry $</th>
+            <th data-tc="exit_price"  class="sortable numeric">Exit $</th>
+            <th data-tc="hold_minutes" class="sortable numeric">Hold</th>
+            <th data-tc="capital_used" class="sortable numeric">Capital</th>
+            <th data-tc="return_pct"   class="sortable numeric">Return %</th>
+            <th data-tc="return_dollars" class="sortable numeric">Return $</th>
+            <th data-tc="exit_reason" class="sortable">Exit Reason</th>
+          </tr>
+        </thead>
+        <tbody id="trade-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Per-ticker contribution -->
+  <div class="trade-section">
+    <div class="section-header">
+      <h2>Per-Ticker Contribution</h2>
+      <div class="section-note">Sorted by absolute cumulative P&amp;L (top 30)</div>
+    </div>
+    <div class="trade-table-scroll">
+      <table class="trade-table" id="ticker-table">
+        <thead>
+          <tr>
+            <th>Ticker</th>
+            <th class="numeric">Trades</th>
+            <th class="numeric">Long</th>
+            <th class="numeric">Short</th>
+            <th class="numeric">Cum P&amp;L</th>
+          </tr>
+        </thead>
+        <tbody id="ticker-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer class="grid-footer">
+    <div id="detail-last-fire">—</div>
+    <div>Data source: <code>/outputs/markouts.json</code></div>
+  </footer>
+</div>
+
+<!-- Hover tooltip (used by grid cards) -->
+<div id="model-tooltip" class="model-tooltip" style="display:none"></div>
+
+<script src="markouts_v32.js"></script>
+</body>
+</html>

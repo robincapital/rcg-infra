@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RCG Markout Dashboard v29</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<link rel="stylesheet" href="markouts_v29.css">
+</head>
+<body>
+<div class="container">
+
+    <!-- Header -->
+    <div class="header">
+        <div>
+            <h1>Markout Dashboard <span class="version">v29</span></h1>
+            <div class="subtitle">Robin Capital Group — Trade-first model evaluation — Table interface</div>
+        </div>
+        <div class="header-right">
+            <div class="timestamp" id="generated-at">Loading...</div>
+            <button id="btn-refresh" class="btn-primary" title="Re-read markouts.json">↻ Refresh</button>
+        </div>
+    </div>
+
+    <!-- Trade Rules Info -->
+    <div class="info-banner" id="trade-rules-banner">
+        <strong>Strategy:</strong> Long ≥+60 / Short ≤-60 · Exit |score|<35 · Max 15 positions · Equal-weight · RTH only<br>
+        <strong>Costs:</strong> 5 bps/yr platform + <span id="current-slippage">5 bps</span>/side slippage
+    </div>
+
+    <!-- Error Banner -->
+    <div id="error-banner" class="error-banner"></div>
+
+    <!-- Summary Statistics Panel -->
+    <div class="summary-panel" id="summary-panel">
+        <div class="summary-card">
+            <div class="summary-icon">📊</div>
+            <div class="summary-value" id="stat-total-models">—</div>
+            <div class="summary-label">Total Models</div>
+        </div>
+        <div class="summary-card">
+            <div class="summary-icon">✓</div>
+            <div class="summary-value" id="stat-with-trades">—</div>
+            <div class="summary-label">With Trades</div>
+        </div>
+        <div class="summary-card">
+            <div class="summary-icon">⭐</div>
+            <div class="summary-value" id="stat-champions">—</div>
+            <div class="summary-label">Champions</div>
+        </div>
+        <div class="summary-card">
+            <div class="summary-icon">🎯</div>
+            <div class="summary-value" id="stat-profitable">—</div>
+            <div class="summary-label">Profitable</div>
+        </div>
+        <div class="summary-card">
+            <div class="summary-icon">📈</div>
+            <div class="summary-value" id="stat-avg-return">—</div>
+            <div class="summary-label">Avg Return</div>
+        </div>
+        <div class="summary-card">
+            <div class="summary-icon">⚡</div>
+            <div class="summary-value" id="stat-avg-sharpe">—</div>
+            <div class="summary-label">Avg Sharpe</div>
+        </div>
+        <div class="summary-card">
+            <div class="summary-icon">🔄</div>
+            <div class="summary-value" id="stat-total-trades">—</div>
+            <div class="summary-label">Total Trades</div>
+            <div class="summary-sublabel" id="stat-long-short">—</div>
+        </div>
+        <div class="summary-card">
+            <div class="summary-icon">⏱️</div>
+            <div class="summary-value" id="stat-avg-hold">—</div>
+            <div class="summary-label">Avg Hold</div>
+        </div>
+    </div>
+
+    <!-- Filter Bar -->
+    <div class="filter-bar">
+        <div class="filter-row">
+            <div class="filter-group">
+                <label>🔍 Search</label>
+                <input type="text" id="filter-search" placeholder="Model name..." autocomplete="off">
+            </div>
+            <div class="filter-group">
+                <label>Strategy Type</label>
+                <select id="filter-family">
+                    <option value="all">All Types</option>
+                    <!-- Populated by JS -->
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>Min Trades</label>
+                <select id="filter-min-trades">
+                    <option value="0">All (n≥0)</option>
+                    <option value="1">Has trades (n≥1)</option>
+                    <option value="5">n ≥ 5</option>
+                    <option value="10" selected>n ≥ 10</option>
+                    <option value="20">n ≥ 20</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>Slippage</label>
+                <select id="filter-slippage">
+                    <option value="0bps">0 bps/side</option>
+                    <option value="5bps" selected>5 bps/side</option>
+                    <option value="10bps">10 bps/side</option>
+                </select>
+            </div>
+        </div>
+        <div class="filter-row">
+            <label class="checkbox-label">
+                <input type="checkbox" id="filter-champions"> ★ Champions only
+            </label>
+            <label class="checkbox-label">
+                <input type="checkbox" id="filter-profitable"> Profitable (return > 0)
+            </label>
+            <label class="checkbox-label">
+                <input type="checkbox" id="filter-has-trades" checked> Has trades (n ≥ 1)
+            </label>
+            <div class="filter-summary" id="filter-summary">Showing <strong>0</strong> of <strong>0</strong> models</div>
+        </div>
+    </div>
+
+    <!-- Main Table -->
+    <div class="table-container">
+        <table id="models-table">
+            <thead>
+                <tr>
+                    <th class="sortable" data-col="family">Strategy Type</th>
+                    <th class="sortable" data-col="model">Model</th>
+                    <th class="sortable center" data-col="champion">★</th>
+                    <th class="sortable numeric" data-col="return">Return</th>
+                    <th class="sortable numeric" data-col="sharpe">Sharpe</th>
+                    <th class="sortable numeric" data-col="max_dd">Max DD</th>
+                    <th class="sortable numeric" data-col="trades">Trades</th>
+                    <th class="sortable numeric" data-col="hit_rate">Hit %</th>
+                    <th class="sortable numeric" data-col="avg_hold">Avg Hold</th>
+                    <th class="sortable center" data-col="status">Status</th>
+                </tr>
+            </thead>
+            <tbody id="models-tbody">
+                <!-- Rows populated by JS -->
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Detail Panel (hidden by default) -->
+    <div id="detail-panel" class="detail-panel">
+        <div class="detail-header">
+            <div class="detail-title" id="detail-title">Model Name</div>
+            <button class="btn-close" id="btn-close-detail">✕</button>
+        </div>
+        <div class="detail-content">
+            <!-- Metrics Summary -->
+            <div class="detail-metrics" id="detail-metrics">
+                <!-- Populated by JS -->
+            </div>
+
+            <!-- Charts Grid -->
+            <div class="charts-grid">
+                <!-- Row 1: Equity + Drawdown -->
+                <div class="chart-box chart-large">
+                    <div class="chart-title">Cumulative P&L (1.0 = entry capital)</div>
+                    <div id="chart-equity" class="chart-canvas"></div>
+                </div>
+                <div class="chart-box chart-small">
+                    <div class="chart-title">Drawdown</div>
+                    <div id="chart-dd" class="chart-canvas"></div>
+                </div>
+
+                <!-- Row 2: Calibration + Rolling IC -->
+                <div class="chart-box">
+                    <div class="chart-title">Calibration — Score Bucket → Avg Return</div>
+                    <div id="chart-calib" class="chart-canvas"></div>
+                    <div class="chart-note" id="calib-note"></div>
+                </div>
+                <div class="chart-box">
+                    <div class="chart-title">Rolling 30d IC (directional)</div>
+                    <div id="chart-rolling-ic" class="chart-canvas"></div>
+                </div>
+
+                <!-- Row 3: Top Contributors + Monthly -->
+                <div class="chart-box">
+                    <div class="chart-title">Top Contributors (per ticker P&L)</div>
+                    <div id="chart-tickers" class="chart-canvas"></div>
+                    <div class="chart-note" id="ticker-note"></div>
+                </div>
+                <div class="chart-box">
+                    <div class="chart-title">Monthly Breakdown</div>
+                    <div id="chart-monthly" class="chart-canvas"></div>
+                </div>
+            </div>
+
+            <!-- Navigation -->
+            <div class="detail-nav">
+                <button id="btn-prev-model" class="btn-secondary">◀ Previous Model</button>
+                <button id="btn-export" class="btn-secondary">📥 Export CSV</button>
+                <button id="btn-next-model" class="btn-secondary">Next Model ▶</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scatter Plot Section -->
+    <div class="global-section" id="scatter-section">
+        <div class="section-header">
+            <h2>Model Performance Landscape</h2>
+            <div class="section-note">Interactive scatter plots · Click any point to drill down · Size = trade count</div>
+        </div>
+        <div class="scatter-grid">
+            <div class="scatter-chart-box">
+                <div class="chart-title">Return vs Hit Rate (Quadrant View)</div>
+                <div class="chart-subtitle">Top-right = winners (profitable + predictive) · Size by trade count</div>
+                <div id="chart-scatter-return-hit" class="chart-canvas"></div>
+            </div>
+            <div class="scatter-chart-box">
+                <div class="chart-title">Sharpe vs Max Drawdown</div>
+                <div class="chart-subtitle">Top-left = smooth performers (high Sharpe, low DD)</div>
+                <div id="chart-scatter-sharpe-dd" class="chart-canvas"></div>
+            </div>
+            <div class="scatter-chart-box">
+                <div class="chart-title">Trades vs Avg Hold Time</div>
+                <div class="chart-subtitle">High trades + short hold = high-frequency signals</div>
+                <div id="chart-scatter-trades-hold" class="chart-canvas"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Correlation Matrix (global, below detail panel) -->
+    <div class="global-section" id="correlation-section">
+        <div class="section-header">
+            <h2>Model Correlation Matrix (Family Champions)</h2>
+            <div class="section-note">Pearson correlation of daily NET returns · Higher = picks similar names</div>
+        </div>
+        <div class="chart-box">
+            <div id="chart-correlation" style="width:100%; height:500px;"></div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+        <div>Lookback: <span id="lookback-days">90</span> trading days</div>
+        <div>Refresh: nightly 06:00 UTC + on-demand</div>
+        <div>Data: <code>/outputs/markouts.json</code></div>
+    </div>
+
+</div>
+
+<script src="markouts_v29.js"></script>
+</body>
+</html>

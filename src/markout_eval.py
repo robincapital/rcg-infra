@@ -124,6 +124,22 @@ class TradeEvent:
 
 
 @dataclass
+class Trade:
+    """Completed round-trip with prices, for the dashboard's per-trade table."""
+    ticker:        str
+    direction:     int                 # +1 long, -1 short
+    entry_time:    datetime
+    exit_time:     datetime
+    entry_score:   float
+    exit_score:    float               # 0.0 when forced-closed at sim end
+    entry_price:   Optional[float]     # None when live_price unavailable at fire
+    exit_price:    Optional[float]
+    hold_minutes:  float               # wall-clock (exit_time - entry_time)
+    return_pct:    float               # direction-aware price return; 0 if either price is None
+    exit_reason:   str                 # "score_decay" | "forced_close"
+
+
+@dataclass
 class SimResult:
     model_name:               str
     horizon:                  str
@@ -147,6 +163,8 @@ class SimResult:
     trade_log:                list      # list of TradeEvent
     # Per-ticker bookkeeping for the dashboard heatmap
     per_ticker_contribution:  dict      # ticker → {n_trades, cum_pnl, n_long, n_short}
+    # v32: completed round-trips with prices (one Trade per closed position)
+    trades:                   list = field(default_factory=list)  # list of Trade
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -212,6 +230,79 @@ def _pull_fires(
     return dict(scores_by_bucket), dict(r30_by_bucket)
 
 
+def _pull_prices(
+    cutoff_days: Optional[int] = None,
+    cutoff_end:  Optional[datetime] = None,
+) -> dict:
+    """
+    Returns {bucket_time: {ticker: live_price}} over the same window the sim
+    uses. Bucketing matches `_pull_fires` so entry/exit prices line up with
+    fire times exactly when the predictions-capture cron and the model-score
+    cron share a run_timestamp (the common case — both are ~30-min batches).
+
+    Used by `simulate()` to stamp entry/exit prices onto each round-trip.
+    """
+    where_clause = ""
+    params: list = [BUCKET_SECONDS, BUCKET_SECONDS]
+    if cutoff_days is not None:
+        end = (cutoff_end or datetime.now(timezone.utc))
+        start_ts = end.timestamp() - cutoff_days * 86400
+        where_clause = " AND r.run_timestamp > to_timestamp(%s) AND r.run_timestamp <= %s"
+        params += [start_ts, end]
+
+    sql = f"""
+        SELECT to_timestamp(floor(EXTRACT(EPOCH FROM r.run_timestamp) / %s) * %s) AS bucket_time,
+               s.ticker, s.signal_value
+        FROM signals s
+        JOIN runs r ON s.run_id = r.run_id
+        WHERE s.signal_name = 'live_price'
+          AND s.signal_value IS NOT NULL
+          {where_clause}
+        ORDER BY bucket_time
+    """
+
+    prices_by_bucket: dict = defaultdict(dict)
+    with psycopg.connect(DB_DSN) as conn, conn.cursor() as cur:
+        cur.execute(sql, tuple(params))
+        for bucket_time, ticker, val in cur.fetchall():
+            if not is_rth(bucket_time):
+                continue
+            # Multiple live_price rows can land in one bucket (capture +
+            # screener both write live_price for some tickers). Keep the
+            # latest non-null value — they're typically identical anyway.
+            prices_by_bucket[bucket_time][ticker] = float(val)
+
+    return dict(prices_by_bucket)
+
+
+def _nearest_price(prices_by_bucket: dict, ordered_buckets: list,
+                   bucket: datetime, ticker: str,
+                   max_buckets_back: int = 6) -> Optional[float]:
+    """
+    Return live_price for (bucket, ticker), or the most recent price within
+    `max_buckets_back` buckets if the exact bucket has no price for this
+    ticker. max_buckets_back=6 ≈ 1 hour of 10-min buckets, which covers
+    one missed predictions-capture cycle.
+    """
+    p = prices_by_bucket.get(bucket, {}).get(ticker)
+    if p is not None:
+        return p
+    # Walk backwards through ordered_buckets looking for the most recent
+    # bucket that has a price for this ticker.
+    try:
+        idx = ordered_buckets.index(bucket)
+    except ValueError:
+        return None
+    for back in range(1, max_buckets_back + 1):
+        if idx - back < 0:
+            break
+        prev = ordered_buckets[idx - back]
+        p = prices_by_bucket.get(prev, {}).get(ticker)
+        if p is not None:
+            return p
+    return None
+
+
 # ────────────────────────────────────────────────────────────────────────
 # Core simulation
 # ────────────────────────────────────────────────────────────────────────
@@ -246,13 +337,24 @@ def simulate(
     """
     scores_by_bucket, r30_by_bucket = _pull_fires(
         model_name, horizon, cutoff_days, cutoff_end)
+    # v32: also pull live_price so we can stamp entry/exit prices onto
+    # each round-trip. Shares the same RTH filter and bucketing.
+    prices_by_bucket = _pull_prices(cutoff_days, cutoff_end)
 
     buckets = sorted(scores_by_bucket.keys())
     if not buckets:
         return _empty_result(model_name, horizon, slippage_bps)
 
+    # All buckets in chronological order across both fires and price-only
+    # observations — used by _nearest_price to walk backwards when the
+    # exact fire bucket has no price for a ticker.
+    all_buckets_ordered = sorted(set(buckets) | set(prices_by_bucket.keys()))
+
     positions:  dict[str, Position]   = {}
     trade_log:  list[TradeEvent]      = []
+    trades:     list[Trade]           = []   # v32: completed round-trips with prices
+    open_entry_price: dict            = {}   # ticker → entry_price at fire (or None)
+    open_entry_score: dict            = {}   # ticker → entry_score
     per_ticker_pnl: dict              = defaultdict(lambda: {
         "n_trades": 0, "cum_pnl": 0.0, "n_long": 0, "n_short": 0
     })
@@ -307,6 +409,23 @@ def simulate(
                     direction=pos.direction, score=score, weight=pos.weight))
                 per_ticker_pnl[ticker]["n_trades"] += 1
                 per_ticker_pnl[ticker]["cum_pnl"] += round_trip_pnls[-1]
+                # v32: emit per-trade row with prices
+                ep = open_entry_price.pop(ticker, None)
+                es = open_entry_score.pop(ticker, pos.entry_score)
+                xp = _nearest_price(prices_by_bucket, all_buckets_ordered,
+                                    fire_time, ticker)
+                if ep is not None and xp is not None:
+                    rpct = pos.direction * (xp - ep) / ep
+                else:
+                    rpct = 0.0
+                trades.append(Trade(
+                    ticker=ticker, direction=pos.direction,
+                    entry_time=entry_ts, exit_time=fire_time,
+                    entry_score=es, exit_score=score,
+                    entry_price=ep, exit_price=xp,
+                    hold_minutes=(fire_time - entry_ts).total_seconds() / 60.0,
+                    return_pct=rpct, exit_reason="score_decay",
+                ))
                 positions.pop(ticker)
 
         # ─── (3) Apply entry rules ───
@@ -325,6 +444,12 @@ def simulate(
                 entry_score=score, weight=0.0)
             open_trip_pnl[ticker] = 0.0
             open_trip_entry[ticker] = fire_time
+            # v32: stamp entry price (may be None if no live_price for this
+            # ticker at this fire — we still record the trade with price=None
+            # so the dashboard can show '—' rather than dropping the row)
+            open_entry_price[ticker] = _nearest_price(
+                prices_by_bucket, all_buckets_ordered, fire_time, ticker)
+            open_entry_score[ticker] = score
             # Stats
             if direction > 0: per_ticker_pnl[ticker]["n_long"] += 1
             else:             per_ticker_pnl[ticker]["n_short"] += 1
@@ -378,6 +503,23 @@ def simulate(
                 direction=pos.direction, score=0.0, weight=pos.weight))
             per_ticker_pnl[ticker]["n_trades"] += 1
             per_ticker_pnl[ticker]["cum_pnl"] += round_trip_pnls[-1]
+            # v32: emit forced-close as a Trade row
+            ep = open_entry_price.pop(ticker, None)
+            es = open_entry_score.pop(ticker, pos.entry_score)
+            xp = _nearest_price(prices_by_bucket, all_buckets_ordered,
+                                prev_bucket, ticker)
+            if ep is not None and xp is not None:
+                rpct = pos.direction * (xp - ep) / ep
+            else:
+                rpct = 0.0
+            trades.append(Trade(
+                ticker=ticker, direction=pos.direction,
+                entry_time=entry_ts, exit_time=prev_bucket,
+                entry_score=es, exit_score=0.0,
+                entry_price=ep, exit_price=xp,
+                hold_minutes=(prev_bucket - entry_ts).total_seconds() / 60.0,
+                return_pct=rpct, exit_reason="forced_close",
+            ))
 
     # ─── Build equity curves ───
     # daily_pnl_gross is pure market P&L (no costs applied)
@@ -438,6 +580,7 @@ def simulate(
         avg_hold_trading_minutes=avg_hold_trading,
         trade_log=trade_log,
         per_ticker_contribution=dict(per_ticker_pnl),
+        trades=trades,
     )
 
 
@@ -662,7 +805,7 @@ def _empty_result(model_name: str, horizon: str, slippage_bps: float) -> SimResu
         cum_return_gross=0.0, cum_return_net=0.0,
         sharpe_net=0.0, max_dd_net=0.0,
         hit_rate=0.0, avg_hold_minutes=0.0, avg_hold_trading_minutes=0.0,
-        trade_log=[], per_ticker_contribution={},
+        trade_log=[], per_ticker_contribution={}, trades=[],
     )
 
 

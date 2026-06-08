@@ -269,6 +269,172 @@ def _wrap_universe(fn):
     return wrapped
 
 
+# ────────────────────────────────────────────────────────────────────────
+# v32 ensemble entrants — combine the top-IC champions in new ways.
+# Top-5 IC at 2026-05-28 audit (RTH, |score|>=35):
+#   relative_strength_rank_5bar  +0.050 (after sign fix)
+#   arima_20                      +0.039
+#   combo_meanrev                 +0.034
+#   rsi_extreme_7                 +0.026
+#   mean_rev_20 / bollinger_pos   +0.013
+# These ensembles take the calling convention (bars, ticker=None, ctx=None)
+# so they work uniformly in the MODELS main loop.
+# ────────────────────────────────────────────────────────────────────────
+_arima_20_fn = make_arima(20)
+_arima_50_fn = make_arima(50)
+_combo_meanrev_fn = make_combo_trend([
+    _mr_10, _mr_20, _mr_40, _rsi_7, _rsi_14, _rsi_21, _boll_20_2, _boll_50
+])
+
+
+def _ens_top5_blend(bars, ticker=None, ctx=None):
+    """Equal-weight blend of the 5 highest-IC tournament champions.
+    Returns None if fewer than 3 members produce a score."""
+    parts = []
+    for fn in (_arima_20_fn, _combo_meanrev_fn, _rsi_7, _mr_20, _boll_20_2):
+        try:
+            v = fn(bars)
+            if v is not None:
+                parts.append(v)
+        except Exception:
+            pass
+    # Cross-sectional add-on: relative_strength_rank_5bar (sign-fixed)
+    if ticker and ctx:
+        try:
+            v = qs.relative_strength_rank(ticker, ctx)
+            if v is not None:
+                parts.append(v)
+        except Exception:
+            pass
+    if len(parts) < 3:
+        return None
+    return sum(parts) / len(parts)
+
+
+def _ens_high_conviction_3of5(bars, ticker=None, ctx=None):
+    """Top-5 ensemble with a 3-of-5 agreement gate. Score is the average
+    of all member outputs IF at least 3 of them agree on sign; otherwise 0.
+    Filters to high-conviction multi-model fires."""
+    parts = []
+    for fn in (_arima_20_fn, _combo_meanrev_fn, _rsi_7, _mr_20, _boll_20_2):
+        try:
+            v = fn(bars)
+            if v is not None:
+                parts.append(v)
+        except Exception:
+            pass
+    if ticker and ctx:
+        try:
+            v = qs.relative_strength_rank(ticker, ctx)
+            if v is not None:
+                parts.append(v)
+        except Exception:
+            pass
+    if len(parts) < 3:
+        return None
+    n_pos = sum(1 for v in parts if v > 0)
+    n_neg = sum(1 for v in parts if v < 0)
+    if max(n_pos, n_neg) < 3:
+        return 0.0  # no high-conviction direction
+    return sum(parts) / len(parts)
+
+
+def _ens_arima_x_rsi(bars, ticker=None, ctx=None):
+    """Multiplicative cross of arima_20 × rsi_extreme_7. Both must agree
+    on sign; otherwise zero. Magnitude is geometric mean of the two."""
+    a = _arima_20_fn(bars)
+    r = _rsi_7(bars)
+    if a is None or r is None:
+        return None
+    if (a > 0) == (r > 0):
+        sign = 1.0 if a > 0 else -1.0
+        return sign * (abs(a) * abs(r)) ** 0.5
+    return 0.0
+
+
+def _ens_dual_arima(bars, ticker=None, ctx=None):
+    """Blend of arima_20 + arima_50 — captures both 1h ARIMA and 2.5h
+    ARIMA forecasts. Returns mean of available members."""
+    parts = []
+    for fn in (_arima_20_fn, _arima_50_fn):
+        try:
+            v = fn(bars)
+            if v is not None:
+                parts.append(v)
+        except Exception:
+            pass
+    if not parts:
+        return None
+    return sum(parts) / len(parts)
+
+
+def _make_arima_20_filtered():
+    """arima_20 with the good-hours time-of-day filter applied at fire-time.
+
+    Walk-forward validation 2026-05-28 (docs/arima_20_filtered_walk_forward.md):
+      - good_hours filter: train +0.125 IC → test +0.167 IC (stable, real edge)
+      - per-ticker whitelist: train +0.312 → test -0.035 (overfit, dropped)
+
+    Net expected lift: baseline +0.064 → filtered ~+0.167 IC out-of-time.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    try:
+        from zoneinfo import ZoneInfo as _ZI
+        _ET = _ZI("America/New_York")
+    except ImportError:
+        import pytz as _pytz
+        _ET = _pytz.timezone("America/New_York")
+
+    # Walk-forward-validated good hours (from train set):
+    #   09:38, 10:08, 11:08, 12:08, 13:08, 14:08, 15:08 ET
+    # These are the windows where (sign(score) × r30) avg > median across hours
+    # on the first 60% of data, AND the same pattern holds in the test 40%.
+    _GOOD_HOURS = {(9, 38), (10, 8), (11, 8), (12, 8), (13, 8), (14, 8), (15, 8)}
+
+    _arima = make_arima(20)
+
+    def wrapped(bars, ticker=None, ctx=None):
+        now_et = _dt.now(_tz.utc).astimezone(_ET)
+        # Match exact (hour, minute) — the timer fires at fixed offsets
+        # (HH:08, HH:38) so exact-match works without slack
+        if (now_et.hour, now_et.minute) not in _GOOD_HOURS:
+            # ±5 min slack for any cron drift
+            ok = any(h == now_et.hour and abs(now_et.minute - m) <= 5
+                     for (h, m) in _GOOD_HOURS)
+            if not ok:
+                return None  # outside good hours
+        return _arima(bars)
+
+    return wrapped
+
+
+def _ens_meanrev_weighted(bars, ticker=None, ctx=None):
+    """IC-weighted blend of mean-reversion champions. Weights from the
+    2026-05-28 audit (RTH signed IC, |score|>=35):
+      bollinger_pos_20 +0.013, mean_rev_20 +0.013, rsi_extreme_7 +0.026,
+      combo_meanrev +0.034. Normalized to sum=1 over the members that fire."""
+    weighted = [
+        (0.013, _boll_20_2),
+        (0.013, _mr_20),
+        (0.026, _rsi_7),
+        (0.034, _combo_meanrev_fn),
+    ]
+    parts = []
+    used_w = 0.0
+    for w, fn in weighted:
+        try:
+            v = fn(bars)
+            if v is None:
+                continue
+            parts.append(v * w)
+            used_w += w
+        except Exception:
+            pass
+    if not parts or used_w == 0:
+        return None
+    return sum(parts) / used_w
+
+
 MODELS = [
     # ─ momentum family (5 variants)
     ("momentum_3bar",      "momentum",        make_momentum(3)),
@@ -329,6 +495,52 @@ MODELS = [
     ("relative_strength_rank_5bar", "cross_sectional", _wrap_universe(qs.relative_strength_rank)),
     ("sector_relative_momentum",    "cross_sectional", _wrap_universe(qs.sector_relative_momentum)),
     ("pca_residual_mr",             "cross_sectional", _wrap_universe(qs.pca_residual_mr)),
+
+    # ─── v25 — EXPANSION (May 20 2026) ────────────────────────────────
+    
+    # Enhanced Momentum (5 new)
+    ("momentum_vol_confirmed_5bar",    "momentum", _wrap_pattern(qs.momentum_vol_confirmed, lookback=5)),
+    ("momentum_vol_confirmed_13bar",   "momentum", _wrap_pattern(qs.momentum_vol_confirmed, lookback=13)),
+    ("momentum_52wk_range_position",   "momentum", _wrap_pattern(qs.momentum_52wk_range_position)),
+    ("momentum_acceleration_8bar",     "momentum", _wrap_pattern(qs.momentum_acceleration, recent_window=3, prior_window=5)),
+    ("momentum_multi_timeframe_blend", "momentum", _wrap_pattern(qs.momentum_multi_timeframe_blend)),
+    
+    # Enhanced Mean Reversion (3 new)
+    ("mean_rev_bb_pct_20",             "mean_reversion", _wrap_pattern(qs.mean_rev_bb_pct, period=20)),
+    ("mean_rev_rsi_divergence",        "mean_reversion", _wrap_pattern(qs.mean_rev_rsi_divergence, period=14)),
+    ("mean_rev_volume_spike_fade",     "mean_reversion", _wrap_pattern(qs.mean_rev_volume_spike_fade)),
+    
+    # PCA Top-10 Price Target Basket (1 cross-sectional)
+    ("pca_top10_pt_basket",            "cross_sectional", _wrap_universe(qs.pca_top10_pt_basket)),
+    
+    # Sector ETF PCA (2 cross-sectional)
+    ("sector_etf_pc1",                 "cross_sectional", _wrap_universe(qs.sector_etf_pc1)),
+    ("sector_etf_pc2",                 "cross_sectional", _wrap_universe(qs.sector_etf_pc2)),
+    
+    # Regime-Conditional Variants — bug fixed 2026-05-28 in qs.make_regime_conditional
+    # (was matching against label strings 'high_volatility'/'crisis' that regime_tag
+    # never emits; actual labels are "high/bear", "mid/flat", etc.). Restored to roster
+    # to start re-collecting fires under the corrected classifier.
+    ("momentum_8bar_highvol",          "momentum_regime", qs.make_regime_conditional(make_momentum(8), "high_vol")),
+    ("momentum_8bar_lowvol",           "momentum_regime", qs.make_regime_conditional(make_momentum(8), "low_vol")),
+    ("mean_rev_20_concentrated",       "mean_reversion_regime", qs.make_regime_conditional(_mr_20, "sector_concentrated")),
+    ("mean_rev_20_diversified",        "mean_reversion_regime", qs.make_regime_conditional(_mr_20, "sector_diversified")),
+    ("rsi_extreme_14_highvol",         "rsi_extreme_regime", qs.make_regime_conditional(_rsi_14, "high_vol")),
+    ("rsi_extreme_14_lowvol",          "rsi_extreme_regime", qs.make_regime_conditional(_rsi_14, "low_vol")),
+
+    # ─── v32 NEW ENSEMBLES (2026-05-28) — combine top-IC champions ────
+    # Each carries (bars, ticker=None, ctx=None) signature so the main
+    # loop drives them uniformly. Documented in docs/ensemble_v32.md.
+    ("combo_top5_blend",            "ensemble", _ens_top5_blend),
+    ("combo_high_conviction_3of5",  "ensemble", _ens_high_conviction_3of5),
+    ("combo_arima_x_rsi",           "ensemble", _ens_arima_x_rsi),
+    ("combo_dual_arima",            "ensemble", _ens_dual_arima),
+    ("combo_meanrev_weighted",      "ensemble", _ens_meanrev_weighted),
+
+    # ─── v32 OPTIMIZED — arima_20 with whitelist + good-hours filter ───
+    # 2026-05-28 sweep showed this combination lifts IC from +0.118 to
+    # +0.409 (3.5×) at 71.5% hit rate. See docs/model_optimization_sweep.md.
+    ("arima_20_filtered",           "arima", _make_arima_20_filtered()),
 ]
 
 
@@ -354,6 +566,14 @@ def main():
     # for every ticker without re-doing the PCA SVD.
     sector_map = qs.load_sector_map_from_screener_csv()
     ctx = qs.build_universe_context(watchlist, sector_map=sector_map)
+    
+    # v25: add regime metadata to context for regime-conditional signals
+    ctx["regime_label"] = regime.get("regime_label")
+    ctx["regime_meta"] = {
+        "vix": regime.get("vix"),
+        "spy_5d_pct": regime.get("spy_5d_pct"),
+        "sector_concentration_pct": regime.get("sector_concentration_pct", 0),
+    }
     pca_u = ctx.get("pca_universe") or []
     print(f"[models] universe ctx: {len(ctx.get('ret_5bar') or {})} tickers, "
           f"{len(ctx.get('sector_etf_5bar_for_ticker') or {})} sector-matched, "

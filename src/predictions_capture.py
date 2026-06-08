@@ -38,8 +38,45 @@ from datetime import datetime, timezone
 sys.path.insert(0, "/home/nixos/Prod/V1/src")
 import signals_db as sdb  # noqa: E402
 import regime_tag  # noqa: E402
+import psycopg  # noqa: E402
 
 PRICES_PATH       = Path("/home/nixos/Prod/V1/src/bloomberg_prices.json")
+
+# ─── Phase C — trigger-only persistence config ────────────────────────
+# Per docs/bbg_dapi_override.md: persist BBG-derived data only when a
+# model signal triggers (i.e., a fire could lead to a trade). Macros are
+# always-persisted because dashboards + regime tracking need them.
+DB_DSN = "host=/run/postgresql user=nixos dbname=rcg_signals"
+ACTIVE_LOOKBACK_MIN  = 35           # how far back to look for fires
+ACTIVE_SCORE_THRESH  = 60.0         # |score| >= this counts as "fire"
+                                    # matches markout_eval.ENTRY_THRESHOLD; tickers
+                                    # below this can't trade so persistence is wasted
+ALWAYS_PERSIST = {
+    "SPY", "VIX", "TLT", "QQQ", "IWM", "GLD", "SLV", "USO", "DBC",
+    "UUP", "EFA", "EEM", "HYG", "LQD", "XLK", "XLE", "XLF", "XLV",
+}
+
+
+def get_active_tickers(lookback_min: int = ACTIVE_LOOKBACK_MIN,
+                       score_thresh: float = ACTIVE_SCORE_THRESH) -> set:
+    """Return tickers that had at least one model fire above threshold in
+    the lookback window. Falls back to empty set on DB error so the
+    capture degrades to macros-only rather than blowing up."""
+    try:
+        with psycopg.connect(DB_DSN) as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT s.ticker
+                FROM signals s JOIN runs r ON s.run_id = r.run_id
+                WHERE r.run_type = 'model_score'
+                  AND r.run_timestamp > NOW() - make_interval(mins => %s)
+                  AND s.signal_name LIKE 'model_%%_score'
+                  AND ABS(s.signal_value) >= %s
+            """, (lookback_min, score_thresh))
+            return {row[0] for row in cur.fetchall()}
+    except Exception as e:
+        print(f"[predictions_capture] WARN: get_active_tickers failed: {e}; "
+              f"falling back to macros only")
+        return set()
 SCREENER_CSV_PATH = Path("/home/nixos/Prod/V1/outputs/long_screener_results.csv")
 
 
@@ -283,12 +320,25 @@ def main():
     regime = regime_tag.compute_regime()
     print(f"[predictions] regime: {regime['regime_label']}  (vix={regime['vix']}, spy_5d={regime['spy_5d_pct']}%)")
 
+    # Phase C — trigger-only persistence. Pull the active-tickers set
+    # (anyone who fired |score| >= 35 in the last 35 min) plus always-on
+    # macros. Anything else gets skipped — display data flows through the
+    # live BBG stream, not through this persistent capture.
+    active = get_active_tickers()
+    persist_set = active | ALWAYS_PERSIST
+    print(f"[predictions_capture] trigger-only mode: {len(active)} active fires + "
+          f"{len(ALWAYS_PERSIST)} macros = {len(persist_set)} persistent tickers "
+          f"(watchlist has {len(watchlist)})")
+
     run_id = sdb.record_run(
         run_type="live_prediction",
         config={
             "source":            "predictions_capture.py",
             "bbg_generated_at":  bbg_generated_at,
             "n_watchlist":       len(watchlist),
+            "n_active_fires":    len(active),
+            "n_persistent":      len(persist_set),
+            "persistence_mode":  "trigger_only_v32",
             "screener_csv_seen": SCREENER_CSV_PATH.exists(),
             "regime":            regime,
         },
@@ -297,12 +347,16 @@ def main():
         print("[predictions_capture] signals_db unavailable — capture skipped")
         return
 
-    n_tickers = n_signals = 0
+    n_tickers = n_signals = n_skipped = 0
     for ticker, w in watchlist.items():
         if not w or w.get("error"):
             continue
         bars = w.get("bars") or []
         if len(bars) < 5:
+            continue
+        # Trigger-only gate
+        if ticker not in persist_set:
+            n_skipped += 1
             continue
 
         pred = predictive_composite(bars)
@@ -348,7 +402,7 @@ def main():
     sdb.finalize_run(run_id, n_out=n_tickers)
     print(f"[predictions_capture] run_id={run_id}  "
           f"tickers={n_tickers}  signals={n_signals}  "
-          f"bbg_age={bbg_generated_at}")
+          f"skipped={n_skipped}  bbg_age={bbg_generated_at}")
 
 
 if __name__ == "__main__":

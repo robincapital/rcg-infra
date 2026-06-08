@@ -1,0 +1,12 @@
+[Unit]
+Description=RCG Daily Forward Returns Markout (1d/5d/14d/30d)
+After=network.target
+
+[Timer]
+# Run daily at 8:00 AM ET (after Sharadar morning pull)
+# Assuming system clock is ET, otherwise adjust
+OnCalendar=08:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -33,17 +33,28 @@ from tool_wrapper import execute as tool_execute
 from tool_wrapper import get_schemas_for_hat
 
 
-MAX_TOOL_LOOPS = 50        # v29.11 — raised from 30; exploratory analysis
-                            # sessions (markout diagnostics, leaderboard
-                            # drill-down) routinely need 20-40 iterations
-                            # of read→interpret→read. 50 gives headroom
-                            # without letting a true infinite loop run away.
-MAX_DUPLICATE_TOOL_CALLS = 3  # If the same (tool, input) fires 3+ times in
-                              # a row, short-circuit with a coaching note.
+MAX_TOOL_LOOPS = 50         # v29.11 — exploratory sessions need 20-40
+                            # iterations; 50 gives headroom without letting
+                            # a true infinite loop run away.
+MAX_DUPLICATE_TOOL_CALLS = 3  # Same (tool,input) 3x in a row → short-circuit.
+TOOL_RESULT_CAP = 20_000    # v29.12 — was 50K (~12.5k tok). 20K (~5k tok)
+                            # still fits real outputs (markouts.json head,
+                            # postgres tables, big greps) without flooding
+                            # the window every tool call. Hard cap as a
+                            # belt-and-suspenders OOM guard sits in
+                            # tool_wrapper._tool_bash at 50K bytes.
 DEFAULT_MODEL  = "claude-sonnet-4-5"
 DEFAULT_MAX_TOKENS_OUT = 16384   # Sonnet 4.5 supports up to 64k; 16k handles
-                                  # comprehensive specs, multi-file diffs, etc.
-                                  # Override via config["max_tokens_out"] if needed.
+                                  # comprehensive specs + multi-file diffs.
+
+
+def _truncate_tool_result(s: str) -> str:
+    """Cap tool output before it goes into the conversation state, so giant
+    blobs don't bloat every subsequent API call. Token cost grows linearly
+    with history; one verbose tool call shouldn't tax every turn after it."""
+    if len(s) <= TOOL_RESULT_CAP:
+        return s
+    return s[:TOOL_RESULT_CAP] + f"\n... (truncated, {len(s) - TOOL_RESULT_CAP} bytes more)"
 
 
 def run_turn(
@@ -111,13 +122,21 @@ def run_turn(
             state.set_state("IDLE")
             return
 
-        # Call Anthropic
+        # Call Anthropic.
+        # v29.12 — prompt caching on system + tools. These are stable across
+        # turns within a hat, so a `cache_control: ephemeral` marker on the
+        # last system block + the last tool schema turns subsequent turns
+        # into cache READS (0.1× input cost) instead of full re-billing.
+        # On a typical 10-turn session this cuts input cost by ~50-70%.
         try:
             response = client.messages.create(
                 model=model,
                 max_tokens=max_tokens,
-                system=system_prompt,
-                tools=tool_schemas,
+                system=[
+                    {"type": "text", "text": system_prompt,
+                     "cache_control": {"type": "ephemeral"}}
+                ],
+                tools=_with_tool_cache_marker(tool_schemas),
                 messages=state.messages_for_api(),
             )
         except anthropic.APIError as e:
@@ -163,9 +182,7 @@ def run_turn(
                 tin = tu.input or {}
                 label = _format_tool_call_label(tname, tin)
                 slack_post_fn(f"🔧 `{tname}`: {label}")
-                result = tool_execute(tname, tin, allowed_tools)
-                if len(result) > 50_000:
-                    result = result[:50_000] + f"\n... (truncated, {len(result)-50_000} bytes more)"
+                result = _truncate_tool_result(tool_execute(tname, tin, allowed_tools))
                 state.add_tool_result(
                     tool_use_id=tu.id, result=result,
                     is_error=result.startswith("ERROR") or result.startswith("REFUSED"),
@@ -213,21 +230,18 @@ def run_turn(
             if (len(recent_tool_fingerprints) >= MAX_DUPLICATE_TOOL_CALLS
                     and len(set(recent_tool_fingerprints)) == 1):
                 result = (
-                    "ERROR: identical tool call has fired "
+                    f"ERROR: identical tool call has fired "
                     f"{MAX_DUPLICATE_TOOL_CALLS} times in a row "
-                    "({tname} with same input). Stopping the loop. "
-                    "Change your approach: try a different tool, a "
-                    "different input, or summarize what you've learned "
-                    "and ask the user for direction."
+                    f"({tname} with same input). Stopping the loop. "
+                    f"Change your approach: try a different tool, a "
+                    f"different input, or summarize what you've learned "
+                    f"and ask the user for direction."
                 )
                 slack_post_fn(f"⚠️ Same tool call fired {MAX_DUPLICATE_TOOL_CALLS}x — short-circuiting.")
                 state.add_tool_result(tool_use_id=tu.id, result=result, is_error=True)
                 continue
 
-            result = tool_execute(tname, tin, allowed_tools)
-            # Truncate large outputs for the model context too (saves cost)
-            if len(result) > 50_000:
-                result = result[:50_000] + f"\n... (truncated, {len(result)-50_000} bytes more)"
+            result = _truncate_tool_result(tool_execute(tname, tin, allowed_tools))
             state.add_tool_result(tool_use_id=tu.id, result=result,
                                   is_error=result.startswith("ERROR") or result.startswith("REFUSED"))
 
@@ -296,6 +310,17 @@ def _extract_text(blocks) -> str:
         elif isinstance(b, dict) and b.get("type") == "text":
             parts.append(b.get("text", ""))
     return "\n".join(p for p in parts if p).strip()
+
+
+def _with_tool_cache_marker(tools: List[Dict]) -> List[Dict]:
+    """Mark the LAST tool schema with cache_control so the entire tools array
+    becomes a cacheable prefix. Anthropic caches the prefix UP TO the
+    cache_control marker, so a marker on the last tool covers them all."""
+    if not tools:
+        return tools
+    out = [dict(t) for t in tools]
+    out[-1] = {**out[-1], "cache_control": {"type": "ephemeral"}}
+    return out
 
 
 def _format_tool_call_label(tool_name: str, tool_input: dict) -> str:

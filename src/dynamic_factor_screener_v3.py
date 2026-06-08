@@ -21,6 +21,13 @@ CHANGES v3 -> v3.1:
         vs rate-adjusted sector anchors. Green = cheap vs peers, Red = premium.
   [NEW] Implied multiples computed per ticker in screen_stocks() for display.
 
+CHANGES v3.1 -> v3.2 (2026-05-22):
+  [FIX] Mobile responsive CSS — optimized for small screens with good eyesight
+        Single-column layouts on mobile, reduced font sizes (0.52-0.6rem range)
+        Touch-optimized table rows with smooth scroll on expand
+        Live BBG overlay stacks vertically on mobile with compact sizing
+        Horizontal scroll enabled for results table (650-750px min-width)
+
 Derives macro regime factors from ETF data (SPY, IWM, VTV, VUG, USMV, VYM)
 to dynamically weight BOTH fundamental AND technical/momentum scoring criteria.
 """
@@ -104,7 +111,12 @@ VOL_WINDOW_SLOW = 30
 RSI_PERIOD = 14
 SMA_SHORT = 20
 SMA_LONG = 50
-PRICE_LOOKBACK_DAYS = 180
+# v33 — long-term trend windows
+SMA_200 = 200
+MOM_LONG_DAYS = 252    # 12 trading months ≈ 1 year
+MOM_SKIP_DAYS = 21     # skip last month (mom_12m_1m = momentum from t-252 to t-21)
+HIGH_52W_DAYS = 252
+PRICE_LOOKBACK_DAYS = 400  # bumped 2026-06-03 — need 252+ trading days for 12m momentum + 200-SMA
 
 ANALYST_DIVERGENCE_FLAG = 0.40
 
@@ -139,6 +151,8 @@ EXCLUDE_BIOTECH_PHARMA = True
 SCORING_CRITERIA = [
     "revenue_trend", "ebitda_trend", "fcf_trend", "debt_trend",
     "price_momentum", "rsi_score", "sma_cross_score",
+    # v33 long-term trend factors (2026-06-03)
+    "pct_above_200sma", "mom_12m_1m", "dist_from_52w_high", "pct_above_50sma",
     "upside_score", "sentiment_score",
 ]
 BASELINE_WEIGHT = 1.0 / len(SCORING_CRITERIA)
@@ -149,36 +163,64 @@ _RAW_FACTOR_WEIGHT_MAP = {
         "debt_trend":     -0.04, "price_momentum":  0.14, "rsi_score":       0.08,
         "sma_cross_score": 0.10, "upside_score":   -0.04,
         "sentiment_score": 0.04,
+        # v33 — long-term trend tilt: positive but small (don't dominate)
+        "pct_above_200sma": 0.06, "mom_12m_1m":      0.08,
+        "dist_from_52w_high": 0.04, "pct_above_50sma": 0.04,
     },
     "volatility": {
         "revenue_trend":  -0.02, "ebitda_trend":    0.04, "fcf_trend":       0.12,
         "debt_trend":      0.14, "price_momentum": -0.10, "rsi_score":      -0.08,
         "sma_cross_score":-0.04, "upside_score":    0.12,
         "sentiment_score": 0.06,
+        # v33 — durable trend matters more in high vol; don't chase the latest move
+        "pct_above_200sma": 0.04, "mom_12m_1m":      0.02,
+        "dist_from_52w_high":-0.02, "pct_above_50sma":-0.02,
     },
     "stress": {
         "revenue_trend":   0.00, "ebitda_trend":    0.06, "fcf_trend":       0.16,
         "debt_trend":      0.16, "price_momentum": -0.14, "rsi_score":      -0.10,
         "sma_cross_score":-0.08, "upside_score":    0.14,
         "sentiment_score": 0.06,
+        # v33 — in stress, prefer names with multi-year up trend over recent strength
+        "pct_above_200sma": 0.02, "mom_12m_1m":      0.00,
+        "dist_from_52w_high":-0.04, "pct_above_50sma":-0.04,
     },
     "liquidity": {
         "revenue_trend":   0.04, "ebitda_trend":    0.06, "fcf_trend":       0.04,
         "debt_trend":     -0.02, "price_momentum":  0.06, "rsi_score":       0.04,
         "sma_cross_score": 0.04, "upside_score":    0.08,
         "sentiment_score": 0.08,
+        "pct_above_200sma": 0.02, "mom_12m_1m":      0.02,
+        "dist_from_52w_high": 0.00, "pct_above_50sma": 0.02,
     },
     "quality": {
         "revenue_trend":   0.06, "ebitda_trend":    0.08, "fcf_trend":       0.10,
         "debt_trend":      0.08, "price_momentum": -0.08, "rsi_score":      -0.04,
         "sma_cross_score":-0.02, "upside_score":    0.10,
         "sentiment_score": 0.00,
+        # v33 — quality + long-term trend = compounders that don't whipsaw
+        "pct_above_200sma": 0.06, "mom_12m_1m":      0.04,
+        "dist_from_52w_high": 0.02, "pct_above_50sma": 0.00,
     },
     "dividends": {
         "revenue_trend":   0.00, "ebitda_trend":    0.04, "fcf_trend":       0.10,
         "debt_trend":      0.06, "price_momentum": -0.04, "rsi_score":      -0.02,
         "sma_cross_score": 0.00, "upside_score":    0.08,
         "sentiment_score": 0.02,
+        "pct_above_200sma": 0.04, "mom_12m_1m":      0.00,
+        "dist_from_52w_high": 0.00, "pct_above_50sma": 0.00,
+    },
+    # v33 — NEW compounder regime: fundamentals + long-term trend
+    # Triggered when market is calm and trending up (VIX<18 + SPY 5d>0).
+    # This is what powers the parallel long_screener_compounders.csv output.
+    "compounder": {
+        "revenue_trend":   0.12, "ebitda_trend":    0.12, "fcf_trend":       0.12,
+        "debt_trend":      0.08, "price_momentum": -0.04, "rsi_score":      -0.04,
+        "sma_cross_score":-0.02, "upside_score":    0.04,
+        "sentiment_score": 0.02,
+        # Long-term trend is the proxy for "fundamentally strong + actually working"
+        "pct_above_200sma": 0.12, "mom_12m_1m":      0.14,
+        "dist_from_52w_high": 0.06, "pct_above_50sma": 0.04,
     },
 }
 
@@ -786,11 +828,69 @@ def compute_price_momentum(closes, window=60):
     return (closes[-1] / closes[-window]) - 1.0
 
 
+# v33 — long-term trend factors (2026-06-03)
+# All return values are scaled to be roughly comparable in magnitude to the
+# existing short-term technicals (ranges ~±0.5 typically) so the composite
+# blending works cleanly under apply_dynamic_scores's standardization.
+
+def compute_pct_above_200sma(closes):
+    """Fraction the latest close is above the trailing 200-day SMA.
+    +0.10 = 10% above SMA. Clipped to ±0.5 to limit outlier impact."""
+    if len(closes) < SMA_200:
+        return 0.0
+    sma200 = float(np.mean(closes[-SMA_200:]))
+    if sma200 <= 0:
+        return 0.0
+    raw = (float(closes[-1]) / sma200) - 1.0
+    return float(np.clip(raw, -0.5, 0.5))
+
+
+def compute_mom_12m_1m(closes):
+    """Classic Jegadeesh-Titman 12-month momentum with last-month skip.
+    Returns (close[t-21] / close[t-252]) - 1. Strips short-term reversal."""
+    if len(closes) < MOM_LONG_DAYS:
+        return 0.0
+    start = float(closes[-MOM_LONG_DAYS])
+    end   = float(closes[-MOM_SKIP_DAYS]) if MOM_SKIP_DAYS > 0 else float(closes[-1])
+    if start <= 0:
+        return 0.0
+    raw = (end / start) - 1.0
+    return float(np.clip(raw, -1.0, 1.5))
+
+
+def compute_dist_from_52w_high(closes):
+    """Distance from 52-week high as a *negative* number close to zero.
+    A name AT its 52w high → 0.0. A name 30% below high → -0.30.
+    Higher (less negative) = stronger uptrend."""
+    if len(closes) < HIGH_52W_DAYS:
+        return 0.0
+    high_52w = float(np.max(closes[-HIGH_52W_DAYS:]))
+    if high_52w <= 0:
+        return 0.0
+    raw = (float(closes[-1]) / high_52w) - 1.0
+    return float(np.clip(raw, -1.0, 0.05))
+
+
+def compute_pct_above_50sma(closes):
+    """Medium-term trend confirmation: fraction close is above 50-day SMA.
+    Used in concert with pct_above_200sma to filter whipsaws."""
+    if len(closes) < SMA_LONG:
+        return 0.0
+    sma50 = float(np.mean(closes[-SMA_LONG:]))
+    if sma50 <= 0:
+        return 0.0
+    raw = (float(closes[-1]) / sma50) - 1.0
+    return float(np.clip(raw, -0.5, 0.5))
+
+
 def compute_technicals_for_ticker(ticker, equity_prices):
     tk = equity_prices.filter(pl.col("ticker") == ticker).sort("date")
     if tk.height < SMA_LONG:
         return {"price_momentum": 0.0, "rsi_score": 0.0, "sma_cross_score": 0.0,
-                "_rsi_raw": None, "_sma20": None, "_sma50": None, "_last_price": None,
+                "pct_above_200sma": 0.0, "mom_12m_1m": 0.0,
+                "dist_from_52w_high": 0.0, "pct_above_50sma": 0.0,
+                "_rsi_raw": None, "_sma20": None, "_sma50": None,
+                "_sma200": None, "_high_52w": None, "_last_price": None,
                 "_has_price_data": False}
     closes = tk["close"].to_numpy().astype(float)
     if "close_display" in tk.columns:
@@ -798,13 +898,29 @@ def compute_technicals_for_ticker(ticker, equity_prices):
     else:
         last_price = round(float(closes[-1]), 2)
     rsi = compute_rsi_wilder(closes, RSI_PERIOD)
+
+    # v33 long-term factors
+    pct_200 = compute_pct_above_200sma(closes)
+    mom_12m = compute_mom_12m_1m(closes)
+    dist_52w = compute_dist_from_52w_high(closes)
+    pct_50  = compute_pct_above_50sma(closes)
+
+    sma200_val = round(float(np.mean(closes[-SMA_200:])), 2) if len(closes) >= SMA_200 else None
+    high_52w_val = round(float(np.max(closes[-HIGH_52W_DAYS:])), 2) if len(closes) >= HIGH_52W_DAYS else None
+
     return {
         "price_momentum": round(compute_price_momentum(closes, LONG_WINDOW), 4),
         "rsi_score": round(rsi_to_score(rsi), 4),
         "sma_cross_score": round(compute_sma_cross(closes, SMA_SHORT, SMA_LONG), 4),
+        "pct_above_200sma": round(pct_200, 4),
+        "mom_12m_1m":       round(mom_12m, 4),
+        "dist_from_52w_high": round(dist_52w, 4),
+        "pct_above_50sma":  round(pct_50, 4),
         "_rsi_raw": round(rsi, 1),
         "_sma20": round(float(np.mean(closes[-SMA_SHORT:])), 2),
         "_sma50": round(float(np.mean(closes[-SMA_LONG:])), 2),
+        "_sma200": sma200_val,
+        "_high_52w": high_52w_val,
         "_last_price": last_price,
         "_has_price_data": True,
     }
@@ -1264,13 +1380,30 @@ def compute_industry_medians(sf1, sector_map):
 
 
 def screen_stocks(sf1, equity_prices, adr_tickers=None, biotech_tickers=None,
-                  sentiment_data=None, sector_map=None, industry_medians=None):
-    latest = sf1.group_by("ticker").agg(
+                  sentiment_data=None, sector_map=None, industry_medians=None,
+                  must_include=None):
+    # v32 — `must_include` (MM-pinned + TAM-tagged tickers) bypasses ALL
+    # internal screen_stocks gates so they show up in long_screener_results
+    # with full fundamental columns populated, not the post-process
+    # placeholder rows. Pre-2026-05-28 they reached this function via the
+    # outer Cap-bypass but got re-filtered by the per-ticker gates below,
+    # leaving the dashboard with empty Comp/MktCap/PT/Upside cells.
+    must_include = {t.upper() for t in (must_include or set())}
+
+    # Cap filter — bypassed for must_include
+    latest_full = sf1.group_by("ticker").agg(
         pl.col("datekey").max().alias("latest_date"),
         pl.col("marketcap").last().alias("marketcap"),
-    ).filter(
-        (pl.col("marketcap") >= MARKET_CAP_MIN) & (pl.col("marketcap") <= MARKET_CAP_MAX)
     )
+    if must_include:
+        latest = latest_full.filter(
+            ((pl.col("marketcap") >= MARKET_CAP_MIN) & (pl.col("marketcap") <= MARKET_CAP_MAX))
+            | pl.col("ticker").is_in(list(must_include))
+        )
+    else:
+        latest = latest_full.filter(
+            (pl.col("marketcap") >= MARKET_CAP_MIN) & (pl.col("marketcap") <= MARKET_CAP_MAX)
+        )
     eligible_tickers = latest["ticker"].to_list()
 
     # v28.8 — MM-pinned + TAM-tagged tickers bypass the ADR/biotech
@@ -1320,9 +1453,17 @@ def screen_stocks(sf1, equity_prices, adr_tickers=None, biotech_tickers=None,
     no_price_count = 0
 
     for ticker in eligible_tickers:
+        # v32 — flag for the per-ticker gates below
+        is_must = ticker.upper() in must_include
+
         # sf1 is already ARQ-filtered at load time (load_sf1, line 327).
         tk = sf1.filter(pl.col("ticker") == ticker).sort("datekey")
         if tk.height < MIN_QUARTERS:
+            # MIN_QUARTERS cannot be bypassed — there's no data to compute
+            # trends from. Log the skip so it's visible upstream.
+            if is_must:
+                print(f"    [must-include] {ticker}: SKIPPED — only {tk.height} quarters "
+                      f"of SF1 data (need {MIN_QUARTERS})")
             continue
 
         revenue = tk["revenue"].to_list() if "revenue" in tk.columns else []
@@ -1361,7 +1502,7 @@ def screen_stocks(sf1, equity_prices, adr_tickers=None, biotech_tickers=None,
                     annual_fcf = float(latest_fcf_val) * 4
                 total_coverage = cash_on_hand + max(annual_fcf, 0)
                 coverage_ratio = total_coverage / net_debt if net_debt > 0 else float('inf')
-                if coverage_ratio < MIN_DEBT_COVERAGE:
+                if coverage_ratio < MIN_DEBT_COVERAGE and not is_must:
                     continue
 
         if len(revenue) >= 2:
@@ -1372,7 +1513,7 @@ def screen_stocks(sf1, equity_prices, adr_tickers=None, biotech_tickers=None,
                     and not (isinstance(r_prev, float) and np.isnan(r_prev))
                     and r_prev != 0):
                 rev_qoq = (r_curr - r_prev) / abs(r_prev)
-                if rev_qoq < -0.20:
+                if rev_qoq < -0.20 and not is_must:
                     continue
 
         if industry_medians and len(revenue) >= 2:
@@ -1404,7 +1545,7 @@ def screen_stocks(sf1, equity_prices, adr_tickers=None, biotech_tickers=None,
                     if clean_rev[-1] > clean_rev[-3]:
                         beats += 1
 
-            if beats < 2:
+            if beats < 2 and not is_must:
                 continue
 
         rev_trend = compute_trend_score(revenue)
@@ -1524,6 +1665,11 @@ def screen_stocks(sf1, equity_prices, adr_tickers=None, biotech_tickers=None,
             "price_momentum": techs["price_momentum"],
             "rsi_score": techs["rsi_score"],
             "sma_cross_score": techs["sma_cross_score"],
+            # v33 long-term trend factors
+            "pct_above_200sma":   techs.get("pct_above_200sma", 0.0),
+            "mom_12m_1m":         techs.get("mom_12m_1m", 0.0),
+            "dist_from_52w_high": techs.get("dist_from_52w_high", 0.0),
+            "pct_above_50sma":    techs.get("pct_above_50sma", 0.0),
             "upside_score": 0.0,
             "sentiment_score": (sentiment_data or {}).get(ticker, {}).get("sentiment_score", 0.0),
             "analyst_count": (sentiment_data or {}).get(ticker, {}).get("total_analysts", 0),
@@ -1761,6 +1907,11 @@ def generate_html_report(factors, weights, baseline_weights, screened, run_time,
         "revenue_trend": "Revenue", "ebitda_trend": "EBITDA", "fcf_trend": "Free Cash Flow",
         "debt_trend": "Debt Reduction", "price_momentum": "Price Momentum (60d)",
         "rsi_score": "RSI Signal (14d)", "sma_cross_score": "SMA Cross (20/50)",
+        # v33 long-term trend factors
+        "pct_above_200sma":   "Above 200d SMA",
+        "mom_12m_1m":         "Momentum (12m-1m)",
+        "dist_from_52w_high": "Dist from 52w High",
+        "pct_above_50sma":    "Above 50d SMA",
         "upside_score": "Blended Target Upside", "sentiment_score": "Analyst Consensus",
     }
     categories = {
@@ -1768,6 +1919,11 @@ def generate_html_report(factors, weights, baseline_weights, screened, run_time,
         "fcf_trend": "Fundamental", "debt_trend": "Fundamental",
         "price_momentum": "Technical", "rsi_score": "Technical",
         "sma_cross_score": "Technical",
+        # v33 — long-term trend factors are their own bucket
+        "pct_above_200sma":   "Long-term trend",
+        "mom_12m_1m":         "Long-term trend",
+        "dist_from_52w_high": "Long-term trend",
+        "pct_above_50sma":    "Long-term trend",
         "upside_score": "Valuation", "sentiment_score": "Sentiment",
     }
     weight_rows = ""
@@ -2099,7 +2255,7 @@ def generate_html_report(factors, weights, baseline_weights, screened, run_time,
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RCG Dynamic Factor Screener v3.1</title>
+<title>RCG Dynamic Factor Screener v3.2 (Mobile-Optimized)</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root {{
@@ -2154,12 +2310,155 @@ body {{ font-family: 'DM Sans', sans-serif; background: var(--navy); color: var(
 .footer {{ margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border); font-size: 0.7rem; color: var(--text-dim); text-align: center; }}
 .result-row:hover {{ background: var(--navy-mid) !important; }}
 .val-panel-row td {{ padding: 0 !important; }}
+
+/* ========================================================== */
+/* MOBILE RESPONSIVE - Optimized for good eyesight          */
+/* ========================================================== */
+@media (max-width: 768px) {{
+    body {{ padding: 0.5rem; }}
+    
+    .container {{ padding: 0; }}
+    
+    /* Header */
+    .header {{ 
+        flex-direction: column; 
+        align-items: flex-start; 
+        gap: 0.5rem; 
+        padding-bottom: 0.75rem;
+    }}
+    .header h1 {{ font-size: 1rem; }}
+    .header .subtitle {{ font-size: 0.6rem; line-height: 1.3; }}
+    .header .timestamp {{ font-size: 0.55rem; }}
+    
+    /* Section titles */
+    .section-title {{ font-size: 0.8rem; margin-bottom: 0.75rem; padding-bottom: 0.4rem; }}
+    
+    /* Factor grid - single column on mobile */
+    .factor-grid {{ 
+        grid-template-columns: 1fr; 
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+    }}
+    .factor-card {{ padding: 0.6rem; }}
+    .factor-name {{ font-size: 0.6rem; }}
+    .factor-signal {{ font-size: 0.55rem; }}
+    .factor-desc {{ font-size: 0.62rem; }}
+    .factor-detail {{ font-size: 0.58rem; }}
+    .z-label {{ font-size: 0.55rem; }}
+    
+    /* Weights section - stack vertically */
+    .weights-section {{ 
+        grid-template-columns: 1fr; 
+        gap: 0.75rem;
+        margin-bottom: 1rem;
+    }}
+    .weight-table {{ font-size: 0.65rem; }}
+    .weight-table th {{ font-size: 0.55rem; padding: 0.3rem 0.4rem; }}
+    .weight-table td {{ font-size: 0.6rem; padding: 0.3rem 0.4rem; }}
+    .weight-table .cat-cell {{ font-size: 0.58rem; }}
+    .methodology {{ font-size: 0.6rem; padding: 0.6rem; line-height: 1.5; }}
+    
+    /* Results table - horizontal scroll with better touch */
+    .results-wrap {{ 
+        margin: 0 -0.5rem;
+        padding: 0 0.5rem;
+        -webkit-overflow-scrolling: touch; /* smooth iOS scroll */
+    }}
+    .results-table {{ 
+        font-size: 0.58rem;
+        min-width: 750px; /* Allow horizontal scroll but keep compact */
+    }}
+    .results-table th {{ 
+        font-size: 0.52rem; 
+        padding: 0.3rem 0.3rem;
+    }}
+    .results-table td {{ 
+        font-size: 0.56rem; 
+        padding: 0.28rem 0.3rem;
+    }}
+    .results-table .ticker .industry-label {{ 
+        font-size: 0.48rem; 
+        max-width: 90px;
+    }}
+    .col-label-row th {{ font-size: 0.48rem; }}
+    .col-group-header {{ font-size: 0.52rem; padding: 0.25rem 0.3rem; }}
+    
+    /* Regime badges - smaller and wrap better */
+    .regime-badge {{ 
+        font-size: 0.52rem; 
+        padding: 0.12rem 0.35rem;
+        margin: 0.08rem 0.12rem;
+    }}
+    .regime-summary {{ padding: 0.6rem; margin-bottom: 0.75rem; }}
+    .regime-summary .label {{ font-size: 0.55rem; }}
+    
+    /* Footer */
+    .footer {{ font-size: 0.55rem; padding-top: 0.6rem; margin-top: 1.5rem; }}
+}}
+
+/* Extra small devices - ultra compact */
+@media (max-width: 480px) {{
+    body {{ padding: 0.4rem; }}
+    
+    .header h1 {{ font-size: 0.9rem; }}
+    .header .subtitle {{ font-size: 0.55rem; }}
+    .header .timestamp {{ font-size: 0.5rem; }}
+    
+    .section-title {{ font-size: 0.75rem; }}
+    
+    .factor-card {{ padding: 0.5rem; }}
+    .factor-name {{ font-size: 0.55rem; }}
+    .factor-signal {{ font-size: 0.5rem; }}
+    .factor-desc {{ font-size: 0.58rem; }}
+    .factor-detail {{ font-size: 0.54rem; }}
+    
+    .results-table {{ min-width: 650px; }}
+    .results-table th {{ font-size: 0.48rem; padding: 0.25rem 0.25rem; }}
+    .results-table td {{ font-size: 0.52rem; padding: 0.25rem 0.25rem; }}
+    
+    .methodology {{ font-size: 0.56rem; }}
+    
+    /* Make touch targets bigger for interactive rows */
+    .results-table tbody tr {{ 
+        cursor: pointer;
+        min-height: 40px; /* iOS minimum touch target */
+    }}
+}}
+
+/* Improve touch interaction */
+@media (hover: none) and (pointer: coarse) {{
+    .results-table tbody tr {{
+        cursor: pointer;
+        -webkit-tap-highlight-color: rgba(200, 168, 78, 0.1);
+    }}
+    .results-table tbody tr:active {{
+        background: var(--navy-mid) !important;
+    }}
+}}
+
+/* Landscape mobile optimization */
+@media (max-width: 900px) and (orientation: landscape) {{
+    body {{ padding: 0.4rem 0.6rem; }}
+    .header {{ padding-bottom: 0.5rem; }}
+    .section-title {{ margin-bottom: 0.5rem; }}
+    .factor-grid {{ gap: 0.4rem; margin-bottom: 0.75rem; }}
+    .weights-section {{ gap: 0.5rem; margin-bottom: 0.75rem; }}
+    .regime-summary {{ padding: 0.5rem; margin-bottom: 0.5rem; }}
+}}
 </style>
 <script>
 function toggleValPanel(i) {{
     var row = document.getElementById('vp-' + i);
     if (!row) return;
-    row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
+    var isHidden = row.style.display === 'none';
+    row.style.display = isHidden ? 'table-row' : 'none';
+    
+    // Smooth scroll on mobile to keep expanded content visible
+    if (isHidden && window.innerWidth < 768) {{
+        setTimeout(function() {{
+            row.scrollIntoView({{ behavior: 'smooth', block: 'nearest' }});
+        }}, 100);
+    }}
 }}
 </script>
 </head>
@@ -2168,7 +2467,7 @@ function toggleValPanel(i) {{
 
     <div class="header">
         <div>
-            <h1>Dynamic Factor-Weighted Screener <span style="font-size: 0.7rem; color: var(--text-dim);">v3.1</span></h1>
+            <h1>Dynamic Factor-Weighted Screener <span style="font-size: 0.7rem; color: var(--text-dim);">v3.2</span></h1>
             <div class="subtitle">Robin Capital Group &mdash; {exclusion_note}, Debt Coverage &ge; {MIN_DEBT_COVERAGE:.0%}, Max {MAX_PER_SECTOR}/sector &mdash; Cap Filter: <strong style="color:var(--gold)">{cap_label}</strong> (${MARKET_CAP_MIN/1e9:.1f}B&ndash;${MARKET_CAP_MAX/1e9:.0f}B) &mdash; Fed Rate: <strong style="color:var(--gold)">{FED_TARGET_RATE*100:.2f}%</strong> ({rate_sign}{rate_spread_bps_display}bps vs neutral)</div>
         </div>
         <div class="timestamp">{run_time}</div>
@@ -2243,7 +2542,7 @@ function toggleValPanel(i) {{
     </table>
     </div>
 
-    <div class="footer">Robin Capital Group LLC &bull; Dynamic Factor Screener v3.1 &bull; {run_time} &bull; Fed Rate: {FED_TARGET_RATE*100:.2f}% &bull; Cap: {cap_label} &bull; Market Bias: {mb_label} ({mb_conf:.0%} conf)</div>
+    <div class="footer">Robin Capital Group LLC &bull; Dynamic Factor Screener v3.2 (Mobile-Optimized) &bull; {run_time} &bull; Fed Rate: {FED_TARGET_RATE*100:.2f}% &bull; Cap: {cap_label} &bull; Market Bias: {mb_label} ({mb_conf:.0%} conf)</div>
 </div>
 </body>
 </html>"""
@@ -2287,6 +2586,48 @@ def _build_live_overlay_block(eod_map: dict, run_time: str) -> str:
   #live-movers .ticker-block {{ background: #1a1a1a; padding: 0.2rem 0.5rem;
     border-radius: 3px; min-width: 110px; }}
   body {{ padding-top: 105px; }}
+  
+  /* Mobile responsive for live overlay */
+  @media (max-width: 768px) {{
+    #live-overlay {{ 
+      padding: 0.3rem 0.5rem; 
+      font-size: 9px;
+    }}
+    #live-overlay .row {{ 
+      flex-direction: column; 
+      gap: 0.3rem; 
+      align-items: flex-start;
+    }}
+    #live-overlay .label {{ font-size: 10px; }}
+    #live-overlay button {{ 
+      padding: 4px 8px; 
+      font-size: 9px;
+      margin-top: 0.2rem;
+    }}
+    #live-movers {{ 
+      max-height: 100px;
+      gap: 0.3rem;
+    }}
+    #live-movers .ticker-block {{ 
+      min-width: 95px;
+      padding: 0.15rem 0.4rem;
+      font-size: 8.5px;
+    }}
+    body {{ padding-top: 140px !important; }}
+  }}
+  
+  @media (max-width: 480px) {{
+    #live-overlay {{ 
+      padding: 0.25rem 0.4rem; 
+      font-size: 8.5px;
+    }}
+    #live-overlay .label {{ font-size: 9px; }}
+    #live-movers .ticker-block {{ 
+      min-width: 85px;
+      font-size: 8px;
+    }}
+    body {{ padding-top: 150px !important; }}
+  }}
 </style>
 <div id="live-overlay">
   <div class="row">
@@ -2504,7 +2845,8 @@ def main(market_cap_preset=None, fed_target_rate=None, fed_neutral_rate=None,
 
     screened = screen_stocks(sf1, equity_prices, adr_tickers, biotech_tickers,
                              sentiment_data=None, sector_map=sector_map,
-                             industry_medians=industry_medians)
+                             industry_medians=industry_medians,
+                             must_include=_mc_bypass)  # v32 — pinned/TAM bypass internal gates
     print(f"  {screened.height} passed industry outperformance + fundamental + exclusion screen")
 
     # Day 5 (Phase 1): bumped from 2x to max(2x, 100). The 2x rule (=80) was
@@ -2696,6 +3038,30 @@ def main(market_cap_preset=None, fed_target_rate=None, fed_neutral_rate=None,
         full_scored.write_csv(str(universe_csv))
         print(f"  Full universe CSV: {universe_csv.resolve()} ({full_scored.height} tickers)")
 
+    # v33 — Parallel COMPOUNDERS output (fundamentals + long-term trend leaders)
+    # Re-scores the same `screened` pool using the `compounder` regime weights,
+    # which heavily favor revenue/ebitda/fcf trends + pct_above_200sma + mom_12m_1m
+    # while de-emphasizing the short-term tech that can mask quietly-improving names.
+    # Output: outputs/long_screener_compounders.csv (top-40, sector-capped).
+    compounders_top = None
+    try:
+        if screened.height > 0:
+            from copy import deepcopy as _dc
+            compounder_weights = _dc(_RAW_FACTOR_WEIGHT_MAP["compounder"])
+            # Convert delta-from-baseline → absolute weights matching apply_dynamic_scores expectation
+            compounder_weights = {k: BASELINE_WEIGHT + v for k, v in compounder_weights.items()}
+            # Re-score the full screened pool with compounder weights
+            compounder_scored = apply_dynamic_scores(screened, compounder_weights)
+            # Take top-40 with sector cap (same rules as the main long_screener_results.csv)
+            compounder_top40 = apply_sector_cap(compounder_scored, MAX_PER_SECTOR, MAX_RESULTS)
+            compounders_csv = output_dir / "long_screener_compounders.csv"
+            compounder_top40.write_csv(str(compounders_csv))
+            print(f"  Compounders CSV: {compounders_csv.resolve()} "
+                  f"({compounder_top40.height} tickers, sector-capped @ {MAX_PER_SECTOR}/sector)")
+            compounders_top = compounder_top40["ticker"].to_list()
+    except Exception as _e:
+        print(f"  [WARN] compounders parallel scoring failed: {type(_e).__name__}: {_e}")
+
     import json as _json
     factors_path = output_dir / "factor_signals.json"
     factors_path.write_text(_json.dumps({
@@ -2754,11 +3120,20 @@ def main(market_cap_preset=None, fed_target_rate=None, fed_neutral_rate=None,
                 bucket_top = (
                     full_scored_sorted
                     .filter(pl.col("marketcap").map_elements(pred, return_dtype=pl.Boolean))
-                    ["ticker"].to_list()[:25]
+                    ["ticker"].to_list()[:80]  # was 25 — v32 watchlist expansion
                 )
                 cap_picks.extend(bucket_top)
         except Exception as _e:
             print(f"  [WARN] cap-bucket picks failed: {_e} — falling back to top-40 only")
+
+        # v32 — Wide top-N from full composite ranking for BBG stream coverage.
+        # The Tier-1 BBG stream subscribes to up to MAX_TICKERS=350; we want
+        # to give it a deep candidate pool sorted by composite score.
+        wide_top_n = []
+        try:
+            wide_top_n = full_scored.sort("composite_score", descending=True)["ticker"].to_list()[:200]
+        except Exception as _e:
+            print(f"  [WARN] wide top-N pull failed: {_e}")
 
         # Merge user-pinned ("starred"/ad-hoc) tickers — these survive every
         # screener regeneration and are force-included even past the 120 cap.
@@ -2786,10 +3161,14 @@ def main(market_cap_preset=None, fed_target_rate=None, fed_neutral_rate=None,
         except Exception as _e:
             print(f"  [WARN] could not collect TAM-tagged tickers: {_e}")
 
+        # v33 — also include the compounders' top-40 so their live BBG data flows
+        _compounders_for_wl = compounders_top if compounders_top else []
         final_watchlist = list(dict.fromkeys(
-            macro + pinned + tam_tickers + top_tickers_for_bbg + cap_picks))
-        # Cap at 120 to keep BBG pull reasonable (~30s at hourly cadence)
-        final_watchlist = final_watchlist[:120]
+            macro + pinned + tam_tickers + top_tickers_for_bbg + _compounders_for_wl + cap_picks + wide_top_n))
+        # v32 — Cap at 350 (was 120). Aligned to bloomberg_stream.py MAX_TICKERS
+        # cap and the ~3,500 concurrent-field BBG subscription limit (350 × 7
+        # fields = 2,450). Per docs/bloomberg_expansion_spec_v2_note.md.
+        final_watchlist = final_watchlist[:350]
         # Force-include any pinned OR TAM-tagged that got cropped
         for _t in pinned + tam_tickers:
             if _t not in final_watchlist:
@@ -2832,7 +3211,7 @@ def main(market_cap_preset=None, fed_target_rate=None, fed_neutral_rate=None,
         print(f"  Watchlist (local): {watchlist_local.resolve()} ({len(final_watchlist)} tickers)")
 
         import subprocess as _sp
-        scp_dest = "ndiaz@rcg-base:C:/Users/ndiaz/Dropbox/RCG_2020/watchlist.json"
+        scp_dest = "ndiaz@100.86.90.78:C:/Users/ndiaz/Dropbox/RCG_2020/watchlist.json"
         scp_result = _sp.run(
             ["scp", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes",
              "-o", "StrictHostKeyChecking=accept-new",

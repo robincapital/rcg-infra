@@ -24,7 +24,7 @@ import psycopg
 import regime_tag
 
 OUTPUT_PATH = Path("/home/nixos/Prod/V1/outputs/leaderboard.json")
-HORIZONS = ["30min", "60min", "4h"]
+HORIZONS = ["30min", "60min", "4h", "1d", "5d", "14d", "30d"]
 
 
 # Fallback family mapping: most signal rows in the DB predate the family
@@ -34,9 +34,9 @@ HORIZONS = ["30min", "60min", "4h"]
 def family_from_model(model_name: str) -> str:
     n = model_name.lower()
     if n == "bbg_predictive_composite":      return "bbg_composite"
-    if n.startswith("momentum_"):            return "momentum"
-    if n.startswith("mean_rev"):             return "mean_reversion"
-    if n.startswith("rsi_extreme"):          return "rsi_extreme"
+    if n.startswith("momentum_") and "regime" not in n:   return "momentum"
+    if n.startswith("mean_rev") and "regime" not in n:    return "mean_reversion"
+    if n.startswith("rsi_extreme") and "regime" not in n: return "rsi_extreme"
     if n.startswith("sma_cross"):            return "sma_cross"
     if n.startswith("ema_cross"):            return "ema_cross"
     if n.startswith("bb_squeeze"):           return "bollinger_pos"   # v24
@@ -45,27 +45,38 @@ def family_from_model(model_name: str) -> str:
     if n.startswith("lr_slope"):             return "lr_slope"
     if n.startswith("arima") or n.startswith("ar2"):  return "arima"  # v24
     if n.startswith("combo_"):               return "ensemble"
-    # v24 — new families
+    # v24 — pattern family
     if n.startswith("hurst") or n.startswith("kalman") or n.startswith("ou_halflife"):
         return "pattern"
+    # v24/v25 — cross-sectional family
     if (n.startswith("relative_strength_rank")
             or n.startswith("sector_relative_momentum")
-            or n.startswith("pca_residual")):
+            or n.startswith("pca_residual")
+            or n.startswith("pca_top10")
+            or n.startswith("sector_etf_pc")):
         return "cross_sectional"
     # v26 — Stage 1 OLS meta-blend
     if n.startswith("meta_blend"):
         return "meta_blend"
+    # v25 — regime-conditional families
+    if "regime" in n:
+        if "momentum" in n:
+            return "momentum_regime"
+        if "mean_rev" in n:
+            return "mean_reversion_regime"
+        if "rsi_extreme" in n:
+            return "rsi_extreme_regime"
     return "other"
 
 
 def _metrics(scores, rets):
-    """Compute hit_rate, IC directional, IC Spearman, avg-score-abs, avg-realized
+    """Compute hit_rate, IC directional, IC Spearman, Sharpe, avg-score-abs, avg-realized
     from parallel arrays of (score, realized_return). Returns dict with the
     keys the dashboard expects, or empty dict if no data."""
     n = len(scores)
     if n == 0:
         return {"n": 0, "n_strong": 0, "hit_rate": None,
-                "ic_directional": None, "ic_spearman": None,
+                "ic_directional": None, "ic_spearman": None, "sharpe_ratio": None,
                 "avg_score_abs": None, "avg_realized": None}
     strong = [(s, r) for s, r in zip(scores, rets) if abs(s) >= 5]
     hits = sum(1 for s, r in strong if (s > 0 and r > 0) or (s < 0 and r < 0))
@@ -75,12 +86,23 @@ def _metrics(scores, rets):
                     for s, r in zip(scores, rets)]
     ic_dir = sum(ic_dir_pairs) / n
     ic_sp = spearman(scores, rets) if n >= 5 else None
+    
+    # Sharpe ratio: mean(rets) / stddev(rets) × sqrt(252) for annualization (if daily)
+    # For intraday horizons, no annualization factor
+    mean_ret = sum(rets) / n
+    if n >= 5:
+        stddev_ret = (sum((r - mean_ret) ** 2 for r in rets) / n) ** 0.5
+        sharpe = (mean_ret / stddev_ret) if stddev_ret > 0 else None
+    else:
+        sharpe = None
+    
     return {
         "n":              n,
         "n_strong":       len(strong),
         "hit_rate":       round(hit_rate, 4) if hit_rate is not None else None,
         "ic_directional": round(ic_dir, 4) if ic_dir is not None else None,
         "ic_spearman":    round(ic_sp, 4) if ic_sp is not None else None,
+        "sharpe_ratio":   round(sharpe, 4) if sharpe is not None else None,
         "avg_score_abs":  round(sum(abs(s) for s in scores) / n, 2),
         "avg_realized":   round(sum(rets) / n, 4),
     }

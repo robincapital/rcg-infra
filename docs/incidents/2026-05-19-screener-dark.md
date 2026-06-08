@@ -1,3 +1,15 @@
+---
+date: 2026-05-19
+severity: P0
+category: production-tool
+component: rcg-sentiment-refresh.service
+status: resolved
+summary: Screener dark for 26h, dashboard prices stale a full trading day; no detection until manual spot-check
+tags: [screener, refresh-server, detection-gap]
+opened_by: nick
+opened_at: 2026-05-19T17:38:00Z
+resolved_at: 2026-05-19T22:00:00Z
+---
 # Incident — Screener Dark for 26 Hours (May 18-19, 2026)
 
 **Discovered:** 2026-05-19 13:38 ET, ~26h after the fault occurred

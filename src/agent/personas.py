@@ -312,7 +312,7 @@ APPROVAL_VERBS = {
     "approve":   ["ship it", "approve", "approved", "go ahead", "looks good", "lgtm", "👍"],
     "deploy":    ["deploy", "ship to main", "push to main", "merge to main"],
     "pr":        ["open pr", "open a pr", "pull request"],
-    "cancel":    ["cancel", "stop", "abort", "nope", "kill it", "cancel task"],
+    "cancel":   ["cancel", "abort", "nope", "kill it", "cancel task", "cancel it", "stop task", "stop it"],
     "revise":    ["revise", "rework", "redo"],
     "status":    ["status", "what's going on", "where are we"],
     "cost":      ["cost", "spend", "budget"],

@@ -38,6 +38,9 @@ Public API:
 
 Author: RCG / Nick Diaz
 Version: 1.0  (2026-04-28)
+  · v28.x  TAM model (Change D), growth overrides, scale/EPS-decay gates
+  · v29.x  2Q-smoothing, fallback ladder, EPS-decay flag
+  · v32    DCF model (Change E) + user price-target blend / pin (Change F)
 """
 from __future__ import annotations
 
@@ -97,6 +100,22 @@ TAM_FCF_MARGIN_CAP     = 0.40   # 40% max — NVDA/Visa ceiling
 TAM_PENETRATION_DEFAULT = 0.10
 TAM_FCF_MARGIN_DEFAULT  = 0.20
 
+# ─── v32 — DCF model constants (Change E) ────────────────────────────────
+# Two-stage discounted-cash-flow model (6th model). Stage-1 FCF grows off a
+# trailing-annualized base at a (decaying) growth rate over DCF_HORIZON_YEARS,
+# then a Gordon-growth terminal value. Discounted at a macro WACC that floats
+# with the Fed spread so the model tightens when rates are high — same spirit
+# as the sector-multiple rate compression the other models use.
+DCF_BASE_WACC          = 0.090   # neutral-rate WACC anchor
+DCF_TERMINAL_GROWTH    = 0.025   # perpetual growth after the explicit horizon
+DCF_HORIZON_YEARS      = 5
+DCF_WACC_FLOOR         = 0.070
+DCF_WACC_CEIL          = 0.150
+DCF_MAX_STAGE1_GROWTH  = 0.30    # clamp the year-1 growth rate (no hyper-growth)
+DCF_MIN_STAGE1_GROWTH  = -0.10
+DCF_WACC_GTERM_GAP_MIN = 0.030   # keep (wacc - g_term) >= this so TV can't blow up
+DCF_ABS_CAP_MULT       = 4.0     # PT cap as multiple of last_price (sanity)
+
 # Gate A — R² floor on conviction.
 R2_HARD_FLOOR    = 0.20   # below this, the model is killed
 R2_FULL_WEIGHT   = 0.40   # at and above this, full conviction formula
@@ -123,7 +142,7 @@ class TargetPriceResult:
     raw_target:      Optional[float] = None     # before haircut, before envelope
     upside_pct:      float           = 0.0      # (target / last_price) - 1
     upside_score:    float           = 0.0      # screener composite score input
-    pt_source:       str             = "N/A"    # "M", "M✓", "M*", "M⚠clip", "A", "N/A"
+    pt_source:       str             = "N/A"    # "M","M✓","M*","M⚠clip","A","FB","U","N/A"
     divergence_flag: bool            = False
     quality_score:   Optional[float] = None     # 0.40 – 1.00
     quality_haircut: float           = 0.0      # 1.0 - quality_adj
@@ -160,6 +179,8 @@ class TargetPriceResult:
             # v29.6 — EPS-decay flag surfaces in the dashboard model-driver chip
             # so MM sees when a name is anchored on a decaying business
             "eps_decay_warning":  b.get("eps_decay_warning", False),
+            # v32 — user price-target blend (pin/weights), when active
+            "user_blend":         b.get("user_blend"),
         }
 
 
@@ -582,6 +603,193 @@ def compute_tam_model(
 
 
 # ============================================================
+# v32 — DCF Model (Change E)
+# ============================================================
+def _dcf_wacc(fed_target_rate: float, fed_neutral_rate: float) -> float:
+    """Macro WACC: base anchor + Fed spread, bounded. Rising rates → higher
+    discount rate → lower DCF value (mirrors the sector-multiple compression
+    used by the EV models)."""
+    spread = (fed_target_rate or 0.0) - (fed_neutral_rate or 0.0)
+    wacc = DCF_BASE_WACC + spread
+    return float(np.clip(wacc, DCF_WACC_FLOOR, DCF_WACC_CEIL))
+
+
+def compute_dcf_model(
+    *,
+    fcf_series:        Sequence,
+    revenue_series:    Sequence,
+    latest_debt:       float,
+    cash_on_hand:      float,
+    share_count:       float,
+    sector:            Optional[str],
+    fed_target_rate:   float,
+    fed_neutral_rate:  float,
+    growth_override_ann_pct: Optional[float] = None,
+) -> Optional[dict]:
+    """
+    Two-stage discounted-cash-flow model (6th model alongside EV/EBITDA,
+    EV/Rev, FCF Yield, Emerging Growth, TAM).
+
+    Math:
+        base_fcf      = 2Q-smoothed trailing quarterly FCF × 4   (annualized)
+        stage-1       = base_fcf compounded at g_t for DCF_HORIZON_YEARS,
+                        where g_t decays linearly from g1 → g_term
+        terminal      = FCF_N · (1 + g_term) / (wacc - g_term)
+        EV            = Σ PV(stage-1 FCF) + PV(terminal)
+        equity        = EV - net_debt
+        pt            = equity / shares
+
+    g1 (year-1 growth) comes from the user override when set, else the
+    trailing-6q OLS revenue growth (FCF is noisier; revenue is the smoother
+    driver), clamped to [DCF_MIN_STAGE1_GROWTH, DCF_MAX_STAGE1_GROWTH].
+
+    Returns None when trailing FCF is non-positive (DCF on negative cash flow
+    is meaningless — those names are valued by EV/Rev / Emerging / TAM
+    instead) or when the resulting equity is non-positive.
+    """
+    if not share_count or share_count <= 0:
+        return None
+
+    fcf_clean = _clean(fcf_series)
+    if len(fcf_clean) < 4:
+        return None
+
+    base_fcf_q = _smooth_2q(fcf_clean)
+    if base_fcf_q is None or base_fcf_q <= 0:
+        return None
+    base_fcf_ann = base_fcf_q * 4.0
+
+    # ── Discount rate + terminal growth ──
+    wacc   = _dcf_wacc(fed_target_rate, fed_neutral_rate)
+    g_term = DCF_TERMINAL_GROWTH
+    # Defensive: keep a floor between wacc and g_term so the Gordon TV is finite
+    if wacc - g_term < DCF_WACC_GTERM_GAP_MIN:
+        wacc = g_term + DCF_WACC_GTERM_GAP_MIN
+
+    # ── Stage-1 growth ──
+    if growth_override_ann_pct is not None:
+        g1 = growth_override_ann_pct / 100.0
+    else:
+        g1 = _lr_annualized_growth(revenue_series)
+        if g1 is None:
+            g1 = _lr_annualized_growth(fcf_series)
+    if g1 is None:
+        g1 = 0.0
+    g1 = float(np.clip(g1, DCF_MIN_STAGE1_GROWTH, DCF_MAX_STAGE1_GROWTH))
+
+    # ── Project + discount explicit horizon ──
+    pv_explicit = 0.0
+    fcf_t = base_fcf_ann
+    n = DCF_HORIZON_YEARS
+    for t in range(1, n + 1):
+        # Linear decay of growth from g1 (year 1) toward g_term (year n)
+        frac = (t - 1) / max(1, (n - 1))
+        g_t  = g1 + (g_term - g1) * frac
+        fcf_t *= (1.0 + g_t)
+        pv_explicit += fcf_t / ((1.0 + wacc) ** t)
+
+    # ── Terminal value (Gordon growth) ──
+    terminal_value = fcf_t * (1.0 + g_term) / (wacc - g_term)
+    pv_terminal    = terminal_value / ((1.0 + wacc) ** n)
+
+    enterprise_value = pv_explicit + pv_terminal
+    equity_value     = enterprise_value - latest_debt + cash_on_hand
+    if equity_value <= 0:
+        return None
+    pt = equity_value / share_count
+
+    # Conviction: anchored on FCF-series trend quality + positivity ratio,
+    # same machinery as the FCF-Yield model so it blends comparably.
+    _, _, r2_fcf = _theil_sen(fcf_clean)
+    cv = float(np.std(fcf_clean) / np.mean(np.abs(fcf_clean))) \
+        if np.mean(np.abs(fcf_clean)) > 0 else 1.0
+    pos_ratio = sum(1 for v in fcf_clean if v > 0) / len(fcf_clean)
+    conv = _model_conviction(r2_fcf, len(fcf_clean), cv) * pos_ratio
+
+    return {
+        "pt":              round(pt, 2),
+        "r2":              round(r2_fcf, 3),
+        "conviction":      round(conv, 4),
+        "wacc_pct":        round(wacc * 100, 2),
+        "terminal_growth_pct": round(g_term * 100, 2),
+        "stage1_growth_pct":   round(g1 * 100, 2),
+        "horizon_years":   n,
+        "base_fcf_ann_m":  round(base_fcf_ann / 1e6, 1),
+        "pv_explicit_m":   round(pv_explicit / 1e6, 1),
+        "pv_terminal_m":   round(pv_terminal / 1e6, 1),
+        "terminal_weight_pct": round(100.0 * pv_terminal / enterprise_value, 1)
+                                 if enterprise_value > 0 else None,
+        "enterprise_value_m":  round(enterprise_value / 1e6, 1),
+        "sector":          sector,
+        "applied_cap":     None,
+    }
+
+
+# ============================================================
+# v32 — User price-target blend (Change F)
+# ============================================================
+# Allowed model keys the user may pin / weight. Must match the keys the engine
+# writes into `models`.
+PT_BLEND_MODELS = ("ev_ebitda", "ev_rev", "fcf_yield", "emerging_growth", "tam", "dcf")
+
+
+def _resolve_user_blend(weights: dict, models: dict, pt_blend: Optional[dict],
+                         gates: list) -> Tuple[dict, bool, dict]:
+    """
+    Apply a per-ticker user price-target blend, OVERRIDING the engine's
+    conviction weights (and any TAM-dominant / emerging-boost adjustment).
+
+    pt_blend shapes:
+        {"mode": "pin",     "model": "dcf"}
+        {"mode": "weights", "weights": {"ev_rev": 0.6, "dcf": 0.4}}
+        None / {"mode": "off"}  → no change (auto conviction weights)
+
+    Only models actually present in `models` (i.e. that produced a PT) are
+    eligible. A pin to a model that didn't compute, or a weight set whose
+    models all dropped, falls through to the auto weights with a gate note.
+
+    Returns (weights, active, info) where `info` is a small dict recorded in
+    the breakdown for the dashboard.
+    """
+    if not pt_blend or not isinstance(pt_blend, dict):
+        return weights, False, {}
+    mode = (pt_blend.get("mode") or "").lower()
+    if mode in ("", "off", "auto", "none"):
+        return weights, False, {}
+
+    eligible = {k for k in models if models[k].get("pt") is not None and models[k]["pt"] > 0}
+
+    if mode == "pin":
+        model = pt_blend.get("model")
+        if model in eligible:
+            new_w = {k: (1.0 if k == model else 0.0) for k in models}
+            gates.append(f"USER_PIN:{model}")
+            if model in weights and weights.get(model, 0.0) == 0.0:
+                # user pinned a model the engine had dropped (R² floor etc.)
+                gates.append(f"USER_PIN_LOW_CONVICTION:{model}")
+            return new_w, True, {"mode": "pin", "model": model, "applied": True}
+        gates.append(f"USER_PIN_UNAVAILABLE:{model}")
+        return weights, False, {"mode": "pin", "model": model, "applied": False}
+
+    if mode == "weights":
+        raw = pt_blend.get("weights") or {}
+        filtered = {k: float(v) for k, v in raw.items()
+                    if k in eligible and v is not None and float(v) > 0}
+        total = sum(filtered.values())
+        if filtered and total > 0:
+            new_w = {k: 0.0 for k in models}
+            for k, v in filtered.items():
+                new_w[k] = v / total
+            gates.append("USER_BLEND_WEIGHTS")
+            return new_w, True, {"mode": "weights", "applied": True,
+                                 "weights": {k: round(new_w[k], 4) for k in filtered}}
+        gates.append("USER_BLEND_EMPTY")
+        return weights, False, {"mode": "weights", "applied": False}
+
+    return weights, False, {}
+
+
+# ============================================================
 # CORE PUBLIC API
 # ============================================================
 def compute_target_price(
@@ -605,6 +813,7 @@ def compute_target_price(
     growth_overrides:       Optional[dict] = None,
     tam_overrides:          Optional[dict] = None,
     eps_series:             Optional[Sequence] = None,
+    pt_blend:               Optional[dict] = None,
 ) -> TargetPriceResult:
     """
     Compute multi-model conviction-weighted price target with all RCG guardrails.
@@ -614,10 +823,19 @@ def compute_target_price(
       2. EV/Revenue         (growth-adjusted anchor, 2.5x sector ceiling)
       3. FCF Yield          (sector-required yield, quality-adjusted)
       4. Emerging Growth    (TAM projection, 25% PV discount, 50% blend weight when fired)
+      5. TAM Penetration    (v28.8 — explicit MM-set TAM; dominant when fired)
+      6. DCF                (v32 — two-stage discounted cash flow, Gordon terminal)
 
     Pipeline:
-      models → R² floor (Gate A) → conviction-weighted blend → quality haircut
-      → envelope to consensus (Gate B) → final target
+      models → R² floor (Gate A) → conviction-weighted blend
+      → user blend (v32: pin / custom weights, supersedes conviction) → quality
+      haircut → envelope to consensus (Gate B) → final target
+
+    pt_blend (v32): per-ticker user override of the blend. Either
+      {"mode":"pin","model":"dcf"} to publish one model, or
+      {"mode":"weights","weights":{"ev_rev":0.6,"dcf":0.4}} for a custom blend.
+      When active, quality haircut + consensus envelope are skipped (publish
+      "in full") and pt_source is "U".
     """
     result = TargetPriceResult()
 
@@ -870,6 +1088,31 @@ def compute_target_price(
             else:
                 result.gates_fired.append(f"R2_FLOOR_DROP:fcf_yield(r2={r2:.3f})")
 
+    # ── v32 MODEL 6: DCF (two-stage discounted cash flow) ────
+    # Runs whenever trailing FCF is positive. Growth driven by the user's
+    # FCF override, else the revenue override, else trailing-6q revenue OLS.
+    try:
+        dcf_growth_ov = ov_fcf if ov_fcf is not None else ov_rev
+        dcf_result = compute_dcf_model(
+            fcf_series       = fcf_series,
+            revenue_series   = revenue_series,
+            latest_debt      = latest_debt,
+            cash_on_hand     = cash_on_hand,
+            share_count      = share_count,
+            sector           = sector,
+            fed_target_rate  = fed_target_rate,
+            fed_neutral_rate = fed_neutral_rate,
+            growth_override_ann_pct = dcf_growth_ov,
+        )
+        if dcf_result is not None:
+            models["dcf"] = dcf_result
+            if dcf_result["conviction"] > 0:
+                convictions["dcf"] = dcf_result["conviction"]
+            else:
+                result.gates_fired.append(f"R2_FLOOR_DROP:dcf(r2={dcf_result['r2']:.3f})")
+    except Exception as e:
+        result.gates_fired.append(f"DCF_MODEL_ERROR:{e}")
+
     # ── MODEL 4: Emerging Growth (TAM-discounted projection) ─
     if emerging and len(rev_raw) >= 4:
         try:
@@ -1056,6 +1299,23 @@ def compute_target_price(
                 f"FCF_RUNAWAY_CAP:{fcf_pt:.0f}->{cap:.0f}"
             )
 
+    # ── DCF SANITY CAP ───────────────────────────────────────
+    # The Gordon terminal value amplifies the stage-1 growth assumption; a
+    # high g1 close to WACC can produce a runaway PT. Cap the DCF model PT at
+    # min(DCF_ABS_CAP_MULT × last_price, 2 × max of other surviving models),
+    # mirroring the FCF runaway guardrail.
+    if "dcf" in models and convictions.get("dcf", 0) > 0:
+        other_pts = [models[k]["pt"] for k in ("ev_ebitda", "ev_rev", "fcf_yield", "emerging_growth")
+                     if k in models and convictions.get(k, 0) > 0]
+        dcf_pt  = models["dcf"]["pt"]
+        abs_cap = DCF_ABS_CAP_MULT * last_price
+        cap = min(abs_cap, 2.0 * max(other_pts)) if other_pts else abs_cap
+        if dcf_pt > cap:
+            models["dcf"]["pt"] = round(cap, 2)
+            models["dcf"]["applied_cap"] = "DCF_RUNAWAY_CAP"
+            models["dcf"]["pt_uncapped"] = round(dcf_pt, 2)
+            result.gates_fired.append(f"DCF_RUNAWAY_CAP:{dcf_pt:.0f}->{cap:.0f}")
+
     total_conv = sum(convictions.values())
     weights = {k: v / total_conv for k, v in convictions.items()}
 
@@ -1113,10 +1373,27 @@ def compute_target_price(
                 weights[k] = 0.0
         weights["emerging_growth"] = eg_w
 
+    # ── v32 USER BLEND (Change F): pin a model or set custom weights ──
+    # Highest precedence — supersedes conviction weights, TAM-dominant, and
+    # the emerging boost. This is the MM saying "publish THIS, full stop."
+    user_blend_active = False
+    user_blend_info: dict = {}
+    if pt_blend:
+        if tam_fired and (pt_blend.get("mode") or "").lower() in ("pin", "weights"):
+            # Note when the user's explicit blend overrides a TAM-dominant call
+            pinned = pt_blend.get("model")
+            if not (pt_blend.get("mode") == "pin" and pinned == "tam"):
+                result.gates_fired.append("USER_BLEND_OVERRODE_TAM")
+        weights, user_blend_active, user_blend_info = _resolve_user_blend(
+            weights, models, pt_blend, result.gates_fired
+        )
+
     raw_blend = sum(weights[k] * models[k]["pt"] for k in weights)
 
-    # Quality haircut on final blended PT (lighter for emerging compounders)
-    if apply_quality_haircut:
+    # Quality haircut on final blended PT (lighter for emerging compounders).
+    # v32 — skipped when a user blend is active: the MM has explicitly chosen
+    # the model(s); publish their number "in full" (same philosophy as TAM).
+    if apply_quality_haircut and not user_blend_active:
         if emerging:
             quality_adj = max(quality, 0.75) if quality >= 0.45 else quality
         else:
@@ -1125,6 +1402,8 @@ def compute_target_price(
         result.quality_haircut = round(1.0 - quality_adj, 3)
     else:
         post_haircut = raw_blend
+        if user_blend_active:
+            result.quality_haircut = 0.0
 
     result.raw_target = round(raw_blend, 2)
 
@@ -1150,6 +1429,8 @@ def compute_target_price(
         "ann_growth_pct":   round(ann_growth * 100, 1),
         "emerging":         emerging,
     }
+    if user_blend_active or user_blend_info:
+        breakdown["user_blend"] = user_blend_info
     result.breakdown = breakdown
 
     # ── GATE B: ENVELOPE TO CONSENSUS ────────────────────────
@@ -1158,21 +1439,32 @@ def compute_target_price(
     # toward analyst consensus would override their analytical call.
     # Analyst target still appears in the report as a reference line.
     final_pt = post_haircut
-    if tam_fired and apply_envelope:
-        result.gates_fired.append("ENVELOPE_SKIPPED_TAM_DOMINANT")
-    if apply_envelope and not tam_fired and analyst_target and analyst_target > 0:
-        final_pt, src, flagged = envelope_to_consensus(
-            internal_pt   = post_haircut,
-            analyst_target = analyst_target,
-            n_analysts    = n_analysts,
-            last_price    = last_price,
-        )
-        result.pt_source       = src
-        result.divergence_flag = flagged
-        if src == "M⚠clip":
-            result.gates_fired.append("ENVELOPE_CLIPPED_TO_CONSENSUS")
+    if user_blend_active:
+        # v32 — user pinned/weighted the models; publish in full, skip the
+        # consensus clip. Still compute the divergence flag for reference so
+        # the dashboard can show how far the chosen blend sits from analysts.
+        result.gates_fired.append("ENVELOPE_SKIPPED_USER_BLEND")
+        result.pt_source = "U"
+        if (analyst_target and analyst_target > 0
+                and n_analysts >= ANALYST_MIN_N and last_price and last_price > 0):
+            div = abs(final_pt - analyst_target) / last_price
+            result.divergence_flag = div > ANALYST_DIVERGENCE_FLAG_THRESHOLD
     else:
-        result.pt_source = "M"
+        if tam_fired and apply_envelope:
+            result.gates_fired.append("ENVELOPE_SKIPPED_TAM_DOMINANT")
+        if apply_envelope and not tam_fired and analyst_target and analyst_target > 0:
+            final_pt, src, flagged = envelope_to_consensus(
+                internal_pt   = post_haircut,
+                analyst_target = analyst_target,
+                n_analysts    = n_analysts,
+                last_price    = last_price,
+            )
+            result.pt_source       = src
+            result.divergence_flag = flagged
+            if src == "M⚠clip":
+                result.gates_fired.append("ENVELOPE_CLIPPED_TO_CONSENSUS")
+        else:
+            result.pt_source = "M"
 
     result.target_price = round(float(final_pt), 2)
     result.upside_pct   = round((final_pt / last_price) - 1.0, 4)
@@ -1330,10 +1622,14 @@ def report_compat(
 # ============================================================
 __all__ = [
     "compute_target_price",
+    "compute_dcf_model",
+    "compute_tam_model",
+    "compute_growth_baseline",
     "envelope_to_consensus",
     "screener_compat",
     "report_compat",
     "TargetPriceResult",
+    "PT_BLEND_MODELS",
     "SECTOR_MULTIPLES",
     "R2_HARD_FLOOR",
     "R2_FULL_WEIGHT",

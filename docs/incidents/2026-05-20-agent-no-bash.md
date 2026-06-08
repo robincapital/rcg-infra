@@ -1,3 +1,15 @@
+---
+date: 2026-05-20
+severity: P1
+category: production-tool
+component: rcg-agent.service
+status: resolved
+summary: Slack agent could not execute commands (missing psycopg + bash PATH gap in user-systemd)
+tags: [agent, slack, systemd, nixos]
+opened_by: nick
+opened_at: 2026-05-20T11:00:00Z
+resolved_at: 2026-05-20T16:30:00Z
+---
 # Incident — Agent "Cannot Execute Commands" (May 19-20)
 
 **Discovered:** 2026-05-20 morning, after the user reported the previous night's Slack agent session insisted it couldn't run code.

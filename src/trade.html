@@ -55,14 +55,66 @@
   .container { display: grid; grid-template-columns: minmax(420px, 1fr) 2.4fr;
                grid-template-rows: auto auto;
                gap: 1rem; padding: 1rem; align-items: start; }
-  .panel-movers       { grid-column: 1; grid-row: 1; }
-  .panel-correlations { grid-column: 1; grid-row: 2; }
+  .panel-movers       { display: none; }   /* v34 — replaced by ticker-tape in header */
+  .panel-correlations { grid-column: 1; grid-row: 1 / span 2; align-self: start; max-height: none; }
   .panel-top          { grid-column: 2; grid-row: 1 / span 2; }
   .panel-leaderboard  { grid-column: 1 / span 2; grid-row: 3; }
   @media (max-width: 900px) {
     .container { grid-template-columns: 1fr; grid-template-rows: none; }
     .panel-movers, .panel-correlations, .panel-top, .panel-leaderboard { grid-column: 1; grid-row: auto; }
   }
+
+  /* ─── v32 Phase 2b — single-page tabs ─── */
+  .tab-bar { display: flex; gap: 2px; padding: 0 1rem; background: var(--bg);
+             border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 18; }
+  .tab-btn { background: transparent; color: var(--dim); border: none; border-bottom: 2px solid transparent;
+             padding: 0.55rem 1.1rem; font-size: 12px; font-weight: 600; letter-spacing: 0.4px;
+             text-transform: uppercase; cursor: pointer; font-family: inherit; }
+  .tab-btn:hover { color: var(--gold2); }
+  .tab-btn.active { color: var(--gold); border-bottom-color: var(--gold); }
+  .tab-btn .tab-count { color: var(--dim); font-weight: 400; font-size: 10px; margin-left: 0.3rem; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* Tickers tab — table on the left, sticky analytics pane on the right */
+  .tickers-layout { display: flex; gap: 1rem; padding: 1rem; align-items: flex-start; }
+  .tickers-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1rem; }
+  .analytics-pane { flex: 0 0 600px; width: 600px; position: sticky; top: 56px;
+                    max-height: calc(100vh - 72px); overflow-y: auto; overflow-x: hidden;
+                    background: var(--panel); border: 1px solid var(--border);
+                    border-top: 2px solid var(--gold); border-radius: 6px; }
+  .analytics-pane .pane-head { padding: 0.55rem 0.9rem; border-bottom: 1px solid var(--border);
+                    font-size: 12px; color: var(--gold); text-transform: uppercase; letter-spacing: 0.5px;
+                    display: flex; justify-content: space-between; align-items: center;
+                    position: sticky; top: 0; background: var(--panel); z-index: 4; }
+  .analytics-pane .pane-body { padding: 0.7rem 0.9rem; }
+  .analytics-pane .pane-empty { padding: 3rem 1rem; color: var(--dim); text-align: center;
+                    font-style: italic; line-height: 1.7; }
+  .analytics-pane .pane-close { cursor: pointer; color: var(--dim); font-size: 11px; font-style: normal; }
+  .analytics-pane .pane-close:hover { color: var(--red); }
+  /* selected row highlight in the Top 40 */
+  #top-tbl tr.row-selected td { background: rgba(201,168,76,0.14); }
+  #top-tbl tr.row-selected td.tkr { color: var(--gold); }
+  /* In the tickers layout the table panel grows with the page rather than
+     capping at viewport height (the pane is what stays put). */
+  .tickers-main .panel-top { max-height: none; }
+  .tickers-main .panel-top .table-wrap { overflow-y: visible; }
+
+  /* Correlations & Movers tab — re-enable the full movers table here */
+  #tab-corr .panel-movers { display: flex; }
+  #tab-corr .container { grid-template-columns: minmax(360px, 1fr) 1.6fr; }
+  #tab-corr .panel-movers      { grid-column: 1; grid-row: 1; }
+  #tab-corr .panel-correlations { grid-column: 2; grid-row: 1 / span 2; }
+  @media (max-width: 1100px) {
+    .tickers-layout { flex-direction: column; }
+    .analytics-pane { position: static; width: 100%; flex-basis: auto; max-height: none; }
+    .tickers-main .panel-top { max-height: calc(100vh - 110px); }
+    .tickers-main .panel-top .table-wrap { overflow-y: auto; }
+  }
+  /* Pane content fits a ~600px column: stack chart over stats, scale the SVG. */
+  .analytics-pane .detail-top { grid-template-columns: 1fr; }
+  .analytics-pane svg { max-width: 100%; height: auto; }
+  .analytics-pane .detail-grid { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
   .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
            display: flex; flex-direction: column; max-height: calc(100vh - 110px); }
   .panel h2 { margin: 0; padding: 0.6rem 1rem; border-bottom: 1px solid var(--border);
@@ -661,6 +713,66 @@
     .leaderboard-table { font-size: 10px; }
     .leaderboard-table th, .leaderboard-table td { padding: 4px 5px; }
   }
+  /* v34 — ticker tape (replaces panel-movers) */
+  .ticker-tape {
+    background: var(--panel2);
+    border-bottom: 1px solid var(--border);
+    padding: 0.35rem 0;
+    overflow: hidden;
+    white-space: nowrap;
+    position: relative;
+    height: 28px;
+  }
+  .ticker-tape-inner {
+    display: inline-block;
+    animation: tape-scroll 240s linear infinite;
+    will-change: transform;
+  }
+  .ticker-tape:hover .ticker-tape-inner { animation-play-state: paused; }
+  @keyframes tape-scroll {
+    0%   { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+  }
+  .tape-item {
+    display: inline-block;
+    padding: 0 0.9rem;
+    font-family: monospace;
+    font-size: 12px;
+    cursor: pointer;
+    border-right: 1px solid rgba(255,255,255,0.08);
+  }
+  .tape-item:hover { background: rgba(201, 168, 76, 0.08); }
+  .tape-item .t-sym { color: var(--gold2); font-weight: bold; margin-right: 0.4rem; }
+  .tape-item .t-px  { color: var(--text); margin-right: 0.4rem; }
+  .tape-item .t-pct.up { color: var(--green-bright); }
+  .tape-item .t-pct.dn { color: var(--red-bright); }
+  .tape-item .t-pct.flat { color: var(--dim); }
+
+  /* v34 — compact correlations widget */
+  .corr-compact { padding: 0.5rem 1rem; display: flex; flex-direction: column; gap: 0.5rem; }
+  .corr-section { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; }
+  .corr-section-lbl {
+    font-size: 11px; color: var(--dim); text-transform: uppercase;
+    letter-spacing: 0.5px; margin-right: 0.5rem; min-width: 95px;
+  }
+  .corr-pill {
+    display: inline-flex; align-items: baseline; gap: 0.3rem;
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 999px;
+    padding: 0.15rem 0.55rem; font-family: monospace; font-size: 11px;
+    cursor: pointer; transition: background 0.1s;
+  }
+  .corr-pill:hover { background: var(--panel); border-color: var(--gold2); }
+  .corr-pill .cp-pair { color: var(--text); }
+  .corr-pill .cp-delta.up { color: var(--green-bright); font-weight: bold; }
+  .corr-pill .cp-delta.dn { color: var(--red-bright); font-weight: bold; }
+  .corr-pill .cp-vals { color: var(--dim); font-size: 10px; }
+  .corr-expand-btn {
+    background: var(--panel2); border: 1px solid var(--border); color: var(--gold2);
+    border-radius: 3px; padding: 2px 8px; font-size: 11px; cursor: pointer; margin-left: 8px;
+  }
+  .corr-expand-btn:hover { border-color: var(--gold2); background: var(--panel); }
+  .corr-full-wrap { display: none; padding: 0.5rem 0; border-top: 1px solid var(--border); margin-top: 0.5rem; }
+  .corr-full-wrap.shown { display: block; }
 </style>
 </head>
 <body>
@@ -674,11 +786,35 @@
     <span class="macro-chip" id="m-bias-chip" title="Hover for components"><span class="lbl">BIAS</span><span id="m-bias">—</span> <span id="m-bias-detail" class="age" style="margin-left:0.4rem"></span></span>
     <span class="macro-chip" id="m-regime-chip" title="Current market regime: VIX bucket + SPY 5d direction. Tournament leaderboard can be filtered by regime to see which models have edge here."><span class="lbl">REGIME</span><span id="m-regime">—</span> <span id="m-regime-detail" class="age" style="margin-left:0.4rem"></span></span>
     <span class="age" id="age">loading…</span>
+    <!-- v34 — BBG status pill -->
+    <span class="macro-chip bbg-status-chip" id="bbg-status-chip"
+          title="Click for BBG terminal state + manual restart"
+          style="cursor:pointer">
+      <span class="lbl">BBG</span>
+      <span id="bbg-status-dot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#666;margin-right:4px;vertical-align:middle"></span>
+      <span id="bbg-status-text">—</span>
+    </span>
+    <!-- BBG restart popover -->
+    <div id="bbg-popover" style="display:none; position:absolute; top:50px; right:14rem; background:var(--panel); border:1px solid var(--gold); border-radius:6px; padding:0.7rem 0.9rem; z-index:30; box-shadow:0 4px 16px rgba(0,0,0,0.6); min-width:280px; font-size:12px;">
+      <div style="font-weight:bold;color:var(--gold);margin-bottom:0.4rem;display:flex;justify-content:space-between;align-items:center">
+        <span>Bloomberg state</span>
+        <span id="bbg-popover-close" style="cursor:pointer;color:var(--red);font-size:11px">[close]</span>
+      </div>
+      <div id="bbg-popover-body" style="color:var(--text);line-height:1.6">loading…</div>
+      <button id="bbg-restart-btn" class="refresh-btn" style="margin-top:0.6rem;width:100%">Trigger Start-of-Day</button>
+    </div>
     <span style="margin-left:auto"></span>
     <a class="nav-link" href="dynamic_factor_screener.html">Full screener →</a>
     <a class="nav-link" href="market_sentiment_bbg.html">Macro / Sentiment →</a>
     <button class="refresh-btn" id="how-to-read-btn" style="background:var(--panel2);color:var(--gold);border:1px solid var(--gold)">How to read</button>
     <button class="refresh-btn" id="refresh-btn">Force pull</button>
+  </div>
+</div>
+
+<!-- v34 — Top movers ticker tape (replaces panel-movers box) -->
+<div class="ticker-tape" id="ticker-tape">
+  <div class="ticker-tape-inner" id="ticker-tape-inner">
+    <span class="tape-item" style="color:var(--dim)">loading movers…</span>
   </div>
 </div>
 
@@ -771,7 +907,163 @@
   <span class="meta-info" id="filter-meta">—</span>
 </div>
 
-<div class="container">
+<div class="tab-bar">
+  <button class="tab-btn active" data-tab="tickers">Top Tickers</button>
+  <button class="tab-btn" data-tab="corr">Correlations &amp; Movers</button>
+  <button class="tab-btn" data-tab="markouts">Markouts</button>
+</div>
+
+<div id="tab-tickers" class="tab-panel active">
+  <div class="tickers-layout">
+    <div class="tickers-main" id="tickers-main"></div>
+    <aside class="analytics-pane" id="analytics-pane">
+      <div class="pane-head">
+        <span id="pane-title">Analytics</span>
+        <span class="pane-close" id="pane-close" style="display:none">✕ clear</span>
+      </div>
+      <div class="pane-empty" id="pane-empty">Click any ticker in the Top Tickers table to load its price chart, valuation breakdown, model weights, and editable assumptions here. It stays put while you scroll.</div>
+      <div class="pane-body" id="pane-body" style="display:none"></div>
+    </aside>
+  </div>
+</div>
+
+<div id="tab-corr" class="tab-panel">
+  <div class="container" id="corr-container"></div>
+</div>
+
+<div id="tab-markouts" class="tab-panel">
+  <div id="markouts-mount" style="margin:1rem">
+    <div class="mk-empty" id="mk-loading" style="padding:3rem">Loading markouts…</div>
+
+    <!-- GRID VIEW -->
+    <div id="mk-grid" class="mk-view" style="display:none">
+      <div class="mk-header">
+        <div class="mk-title-block">
+          <h2 class="mk-h1">Markout Dashboard <span class="mk-version">v32</span></h2>
+          <div class="mk-subtitle">Tournament model evaluation</div>
+        </div>
+        <div class="mk-header-meta">
+          <span id="mk-generated-at">Loading…</span>
+          <span class="mk-pill" id="mk-lookback-pill">—</span>
+          <button id="mk-refresh" class="mk-btn">↻ Refresh</button>
+        </div>
+      </div>
+
+      <div class="mk-banner">
+        <div><strong>Strategy:</strong> Long &ge;+60 / Short &le;&minus;60 · Exit |score|&lt;35 · Max 15 concurrent · Equal-weight · RTH only</div>
+        <div><strong>Costs:</strong> 5 bps/yr platform + <span id="mk-slip-bps">5 bps</span>/side slippage · <strong>Metrics window:</strong> <span id="mk-metrics-window">—</span></div>
+      </div>
+
+      <div class="mk-quick-stats" id="mk-quick-stats"></div>
+
+      <div class="mk-champion-board" id="mk-champion-board">
+        <div class="mk-section-header">
+          <h3>★ Champion Board</h3>
+          <div class="mk-note">Top 5 by current win streak &rarr; return &rarr; Sharpe</div>
+        </div>
+        <div class="mk-champion-grid" id="mk-champion-grid"></div>
+      </div>
+
+      <div class="mk-toolbar">
+        <div class="mk-filter-row">
+          <div class="mk-fgroup"><label>Search</label><input type="text" id="mk-search" placeholder="Model name…" autocomplete="off"></div>
+          <div class="mk-fgroup"><label>Strategy Type</label><select id="mk-family"><option value="all">All Types</option></select></div>
+          <div class="mk-fgroup"><label>Slippage</label><select id="mk-slippage"><option value="0bps">0 bps</option><option value="5bps" selected>5 bps</option><option value="10bps">10 bps</option></select></div>
+          <div class="mk-fgroup"><label>Sort by</label><select id="mk-sort">
+            <option value="streak">Win streak</option><option value="return">Return</option>
+            <option value="sharpe">Sharpe</option><option value="hit_rate">Hit rate</option>
+            <option value="n_trades">Trade count</option><option value="best_trade">Best trade</option>
+          </select></div>
+        </div>
+        <div class="mk-filter-row mk-tier-row">
+          <span class="mk-tier-label">Performance tier:</span>
+          <button class="mk-tier-btn active" data-tier="all">All</button>
+          <button class="mk-tier-btn" data-tier="hot">🔥 Hot</button>
+          <button class="mk-tier-btn" data-tier="warm">⚠ Warm</button>
+          <button class="mk-tier-btn" data-tier="cold">❄ Cold</button>
+          <button class="mk-tier-btn" data-tier="gray">○ Insufficient</button>
+          <label class="mk-cb"><input type="checkbox" id="mk-champions"> ★ Champions only</label>
+          <label class="mk-cb"><input type="checkbox" id="mk-has-trades" checked> n &ge; 10 trades</label>
+          <div class="mk-summary" id="mk-summary">Showing 0 of 0</div>
+        </div>
+      </div>
+
+      <div class="mk-model-grid" id="mk-model-grid"></div>
+      <div class="mk-footer"><div>Click any card to open its detail view.</div><div>Source: <code>/markouts.json</code></div></div>
+    </div>
+
+    <!-- DETAIL VIEW -->
+    <div id="mk-detail" class="mk-view" style="display:none">
+      <div class="mk-header">
+        <div class="mk-title-block">
+          <h2 class="mk-h1" id="mk-detail-name">model</h2>
+          <div class="mk-subtitle" id="mk-detail-desc">—</div>
+        </div>
+        <div class="mk-header-meta">
+          <button id="mk-back" class="mk-btn mk-btn-sec">&larr; All models</button>
+          <button id="mk-refresh-detail" class="mk-btn">↻ Refresh</button>
+        </div>
+      </div>
+      <div class="mk-banner">
+        <div><strong>What it captures:</strong> <span id="mk-what"></span></div>
+        <div><strong>Entry:</strong> <span id="mk-entry"></span></div>
+        <div><strong>Exit:</strong> <span id="mk-exit"></span></div>
+      </div>
+      <div class="mk-detail-badges" id="mk-detail-badges"></div>
+      <div class="mk-detail-metrics" id="mk-detail-metrics"></div>
+      <div class="mk-detail-strip" id="mk-detail-strip"></div>
+      <div class="mk-chart-block">
+        <div class="mk-chart-title">Equity Curve <span class="mk-note" id="mk-chart-window">— window</span></div>
+        <div id="mk-chart-equity"></div>
+      </div>
+      <div class="mk-trade-section">
+        <div class="mk-section-header">
+          <h3>Trade Details (<span id="mk-trade-count">0</span>)</h3>
+          <div class="mk-trade-filter-bar">
+            <button class="mk-tf-btn active" data-tf="all">All</button>
+            <button class="mk-tf-btn" data-tf="long">Longs</button>
+            <button class="mk-tf-btn" data-tf="short">Shorts</button>
+            <button class="mk-tf-btn" data-tf="wins">Winners</button>
+            <button class="mk-tf-btn" data-tf="losses">Losers</button>
+          </div>
+        </div>
+        <div class="mk-table-scroll">
+          <table class="mk-table" id="mk-trade-table">
+            <thead><tr>
+              <th data-tc="exit_time" class="mk-sortable">Exit Time</th>
+              <th data-tc="ticker" class="mk-sortable">Ticker</th>
+              <th data-tc="direction" class="mk-sortable">Dir</th>
+              <th data-tc="entry_score" class="mk-sortable numeric">Score Entry</th>
+              <th data-tc="exit_score" class="mk-sortable numeric">Score Exit</th>
+              <th data-tc="entry_price" class="mk-sortable numeric">Entry $</th>
+              <th data-tc="exit_price" class="mk-sortable numeric">Exit $</th>
+              <th data-tc="hold_minutes" class="mk-sortable numeric">Hold</th>
+              <th data-tc="capital_used" class="mk-sortable numeric">Capital</th>
+              <th data-tc="return_pct" class="mk-sortable numeric">Return %</th>
+              <th data-tc="return_dollars" class="mk-sortable numeric">Return $</th>
+              <th data-tc="exit_reason" class="mk-sortable">Exit Reason</th>
+            </tr></thead>
+            <tbody id="mk-trade-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="mk-trade-section">
+        <div class="mk-section-header"><h3>Per-Ticker Contribution</h3><div class="mk-note">Top 30 by abs cumulative P&amp;L</div></div>
+        <div class="mk-table-scroll">
+          <table class="mk-table" id="mk-ticker-table">
+            <thead><tr><th>Ticker</th><th class="numeric">Trades</th><th class="numeric">Long</th><th class="numeric">Short</th><th class="numeric">Cum P&amp;L</th></tr></thead>
+            <tbody id="mk-ticker-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="mk-footer"><div id="mk-detail-last-fire">—</div><div>Source: <code>/markouts.json</code></div></div>
+    </div>
+  </div>
+</div>
+<div id="mk-tooltip" class="mk-tooltip" style="display:none"></div>
+
+<!-- Existing panels live here; relocated into the tabs above by JS on load. -->
+<div class="container" id="legacy-panels" style="display:none">
   <div class="panel panel-movers">
     <h2>Top Movers (intraday)</h2>
     <div class="legend">Click a column header to sort. All watchlist tickers with EOD close shown.</div>
@@ -793,23 +1085,41 @@
     <div class="meta" id="movers-meta">—</div>
   </div>
 
+  <!-- v34 — Compact correlations: top strengthening/eroding pairs as pills.
+       Click any pill or the Expand button to reveal the full heatmap below. -->
   <div class="panel panel-correlations">
-    <h2>Cross-Asset Rolling Correlation</h2>
-    <div class="corr-controls">
-      <span class="lbl">Window:</span>
-      <button data-corr-win="30d" class="active">30d</button>
-      <button data-corr-win="90d">90d</button>
-      <button data-corr-win="1y">1y</button>
-      <button data-corr-win="delta" title="30d minus 1y — surfaces names whose recent correlation has shifted away from baseline (regime change indicator)">Δ 30d−1y</button>
-      <span class="meta" id="corr-meta">loading…</span>
+    <h2>
+      Cross-Asset Correlations
+      <button class="corr-expand-btn" id="corr-expand-btn" style="float:right">Expand matrix ▾</button>
+    </h2>
+    <div class="corr-compact" id="corr-compact">
+      <div class="empty loading">loading correlation pairs…</div>
     </div>
-    <div class="heatmap-wrap" id="heatmap-wrap">
-      <div class="empty loading">loading correlation matrix…</div>
+    <div class="corr-full-wrap" id="corr-full-wrap">
+      <div class="corr-controls">
+        <span class="lbl">Window:</span>
+        <button data-corr-win="30d" class="active">30d</button>
+        <button data-corr-win="90d">90d</button>
+        <button data-corr-win="1y">1y</button>
+        <button data-corr-win="delta" title="30d minus 1y — surfaces names whose recent correlation has shifted away from baseline (regime change indicator)">Δ 30d−1y</button>
+        <span class="meta" id="corr-meta">—</span>
+      </div>
+      <div class="heatmap-wrap" id="heatmap-wrap">
+        <div class="empty loading">loading correlation matrix…</div>
+      </div>
     </div>
   </div>
 
   <div class="panel panel-top">
-    <h2>Top 40 — Fundamental + Predictive Action</h2>
+    <h2>
+      <span id="top40-title">Top 40 — Fundamental + Predictive Action</span>
+      <span style="float:right; font-size: 11px; font-weight: normal;">
+        <button id="mode-momentum" class="mode-btn active" title="Ranks by main composite — momentum/upside-led"
+                style="background:var(--gold); color:#0d0d0d; border:none; padding:3px 8px; border-radius:3px; cursor:pointer; font-weight:bold; margin-left:4px;">Momentum</button>
+        <button id="mode-compounders" class="mode-btn" title="Ranks by compounder composite — fundamentals + long-term trend"
+                style="background:var(--panel2); color:var(--gold2); border:1px solid var(--gold2); padding:3px 8px; border-radius:3px; cursor:pointer; margin-left:2px;">Compounders</button>
+      </span>
+    </h2>
     <div class="legend">
       Click ticker for chart + PT breakdown · click a column header to sort · <strong>Shift-click</strong> to add secondary sort · click a badge to filter · <strong>Pred is signed</strong>: + bull, − bear<br>
       <span class="badge badge-pre" data-filter="PRE-BREAKOUT">PRE-BREAKOUT</span>
@@ -884,10 +1194,17 @@
 <script>
 (function() {
   'use strict';
-  const REFRESH_MS = 60 * 1000;
-  const PRICES_URL = '/bloomberg_prices.json';
+  const REFRESH_MS = 30 * 1000;          // ↓ from 60s — BBG stream snapshots every 60s, poll twice as often to catch fresh updates
+  const PRICES_URL = '/bloomberg_prices.json';   // hourly puller — has computed indicators (RSI, SMA, etc.)
+  const STREAM_URL = '/bloomberg_stream.json';   // 1-min live tick — has LAST_PRICE / BID / ASK only
+  const STREAM_FRESH_S = 300;            // overlay live prices only when stream is < 5 min old
   const SCREENER_CSV_URL = '/long_screener_results.csv';
   const UNIVERSE_CSV_URL = '/screener_universe.csv';
+  // v33 — parallel compounders CSV (fundamentals + long-term trend leaders)
+  const COMPOUNDERS_CSV_URL = '/long_screener_compounders.csv';
+  // Panel mode: 'momentum' uses screener_universe.csv (existing behavior),
+  // 'compounders' uses long_screener_compounders.csv as the primary ranking source
+  let panelMode = 'momentum';
   const FACTORS_URL = '/factor_signals_bbg.json';
   const FINNHUB_URL = '/finnhub_signals.json';
   const UNIVERSE_TTL_MS = 30 * 60 * 1000;   // refresh universe at most every 30 min
@@ -1018,6 +1335,19 @@
     { key: 'penetration_pct',  label: 'Mature penetration',     unit: '%',  min:   0, max: 20,   step: 0.5 },
     { key: 'fcf_margin_pct',   label: 'Mature FCF margin',      unit: '%',  min:   0, max: 40,   step: 0.5 },
   ];
+  // v32 — pt_blend control. Lets MM pin a single valuation model or set custom
+  // blend weights for this ticker (persisted server-side under "pt_blend",
+  // honored by price_targets.compute_target_price(pt_blend=...)). Order = display.
+  // Must mirror price_targets.PT_BLEND_MODELS.
+  const PT_BLEND_MODELS = ['ev_ebitda', 'ev_rev', 'fcf_yield', 'emerging_growth', 'tam', 'dcf'];
+  const PT_MODEL_LABELS = {
+    ev_ebitda:       'EV / EBITDA',
+    ev_rev:          'EV / Revenue',
+    fcf_yield:       'FCF Yield',
+    emerging_growth: 'Emerging Growth',
+    tam:             'TAM Penetration',
+    dcf:             'DCF',
+  };
   function renderAssumptionsPanelInto(el, ticker, data) {
     if (!data || data.error) {
       el.innerHTML = `<div class="empty" style="padding:0.5rem;color:var(--red)">Assumptions unavailable: ${data?.error || 'no data'}</div>`;
@@ -1090,6 +1420,39 @@
       ? `<span style="color:var(--gold);font-weight:600;">TAM MODEL ACTIVE</span> — 100% weight on TAM PT; other models shown for reference only.`
       : `<span style="color:var(--dim);">Set TAM &gt; 0 to activate TAM-based valuation</span> for this name (engine uses 4-model conventional blend otherwise).`;
 
+    // v32 — pt_blend (pin / custom weights) current state, reflected on render.
+    const blend       = data.pt_blend || null;
+    const blendMode0  = blend?.mode === 'pin' ? 'pin' : (blend?.mode === 'weights' ? 'weights' : 'off');
+    const pinnedModel = blend?.mode === 'pin' ? blend.model : '';
+    const blendW      = blend?.mode === 'weights' ? (blend.weights || {}) : {};
+    // Which models actually produced a PT for this name (from the auto-blend
+    // breakdown). Models not here can be pinned but will fall back (USER_PIN_UNAVAILABLE).
+    const availModels = Object.keys(data.pt_engine_default?.breakdown?.models || {});
+    const blendActiveSrc = (data.pt_with_overrides?.pt_source === 'U');
+    const blendStatus = blendMode0 === 'pin'
+      ? `<span style="color:var(--gold);font-weight:600;">PINNED → ${PT_MODEL_LABELS[pinnedModel] || pinnedModel}</span> — PT uses this model alone (analyst envelope skipped).`
+      : blendMode0 === 'weights'
+        ? `<span style="color:var(--gold);font-weight:600;">CUSTOM WEIGHTS</span> — ${Object.entries(blendW).map(([k,v]) => `${PT_MODEL_LABELS[k]||k} ${(+v).toFixed(2)}`).join(' · ')}`
+        : `<span style="color:var(--dim);">Auto — conviction-weighted blend of all qualified models (default).</span>`;
+    const blendHeaderColor = blendMode0 !== 'off' ? 'var(--gold)' : 'var(--dim)';
+    const modelOptions = PT_BLEND_MODELS.map(mk => {
+      const avail = availModels.includes(mk);
+      const lbl = (PT_MODEL_LABELS[mk] || mk) + (avail ? '' : ' (no PT — will fall back)');
+      return `<option value="${mk}" ${mk === pinnedModel ? 'selected' : ''}>${lbl}</option>`;
+    }).join('');
+    const weightCards = PT_BLEND_MODELS.map(mk => {
+      const avail = availModels.includes(mk);
+      const v = blendW[mk] != null ? blendW[mk] : 0;
+      return `<div class="assumption-card" style="${avail ? '' : 'opacity:0.55'}">
+        <div class="row">
+          <span class="lbl">${PT_MODEL_LABELS[mk] || mk}${avail ? '' : ' <span style="color:var(--dim);font-size:9px">(no PT)</span>'}</span>
+          <span class="val ${v > 0 ? 'user-set' : ''}" data-ptblend-wdisplay="${mk}">${(+v).toFixed(2)}</span>
+        </div>
+        <input type="range" min="0" max="3" step="0.05" value="${v}" data-ptblend-weight="${mk}" />
+      </div>`;
+    }).join('');
+    const pmName = `ptblend-mode-${ticker}`;
+
     el.innerHTML = `
       <h4>
         <span>Assumptions · ${ticker}</span>
@@ -1103,6 +1466,25 @@
           <span style="font-size:10px;">${tamStatus}</span>
         </div>
         <div class="assumptions-grid">${tamCards}</div>
+      </div>
+      <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+          <h4 style="margin:0;font-size:11px;color:${blendHeaderColor};text-transform:uppercase;letter-spacing:0.5px;">Price-Target Model (blend)</h4>
+          <span style="font-size:10px;" data-ptblend-status>${blendStatus}</span>
+        </div>
+        <div class="ptblend-modes" style="display:flex;gap:14px;font-size:11px;margin-bottom:6px;flex-wrap:wrap;">
+          <label style="cursor:pointer;"><input type="radio" name="${pmName}" value="off"     data-ptblend-mode ${blendMode0 === 'off'     ? 'checked' : ''}> Auto blend</label>
+          <label style="cursor:pointer;"><input type="radio" name="${pmName}" value="pin"     data-ptblend-mode ${blendMode0 === 'pin'     ? 'checked' : ''}> Pin one model</label>
+          <label style="cursor:pointer;"><input type="radio" name="${pmName}" value="weights" data-ptblend-mode ${blendMode0 === 'weights' ? 'checked' : ''}> Custom weights</label>
+        </div>
+        <div data-ptblend-pinrow style="display:${blendMode0 === 'pin' ? 'flex' : 'none'};align-items:center;gap:8px;margin-bottom:6px;">
+          <span class="lbl" style="font-size:10px;">Model:</span>
+          <select data-ptblend-model style="background:var(--panel);color:var(--text);border:1px solid var(--border);padding:3px 6px;font-size:11px;border-radius:3px;font-family:inherit;">${modelOptions}</select>
+        </div>
+        <div data-ptblend-wrow style="display:${blendMode0 === 'weights' ? 'block' : 'none'};">
+          <div class="assumptions-grid">${weightCards}</div>
+          <div style="font-size:9px;color:var(--dim);margin-top:3px;">Relative weights (need not sum to 1 — engine renormalizes over models with a valid PT). 0 = exclude.</div>
+        </div>
       </div>
       <div class="assumption-actions">
         <button class="primary" data-action="save">Save & Recompute</button>
@@ -1150,6 +1532,23 @@
         disp.classList.remove('user-set');
       });
     });
+    // v32 — pt_blend: mode radios toggle the pin-row / weights-row visibility
+    el.querySelectorAll('[data-ptblend-mode]').forEach(radio => {
+      radio.addEventListener('change', () => {
+        const mode = el.querySelector('[data-ptblend-mode]:checked')?.value || 'off';
+        el.querySelector('[data-ptblend-pinrow]').style.display = mode === 'pin' ? 'flex' : 'none';
+        el.querySelector('[data-ptblend-wrow]').style.display   = mode === 'weights' ? 'block' : 'none';
+      });
+    });
+    // v32 — pt_blend weight sliders → live value display
+    el.querySelectorAll('input[data-ptblend-weight]').forEach(inp => {
+      const mk = inp.dataset.ptblendWeight;
+      const disp = el.querySelector(`[data-ptblend-wdisplay="${mk}"]`);
+      inp.addEventListener('input', () => {
+        disp.textContent = (+inp.value).toFixed(2);
+        disp.classList.toggle('user-set', +inp.value > 0);
+      });
+    });
     // Per-slider baseline reset
     el.querySelectorAll('[data-reset]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -1187,13 +1586,31 @@
       });
       if (tamAny) body.tam = tamBody;
 
+      // v32 — pt_blend (pin / custom weights) from the UI mode.
+      const blendMode = el.querySelector('[data-ptblend-mode]:checked')?.value || 'off';
+      let blendSpec = { mode: 'off' };
+      let blendActive = false;
+      if (blendMode === 'pin') {
+        const model = el.querySelector('[data-ptblend-model]').value;
+        if (model) { blendSpec = { mode: 'pin', model }; blendActive = true; }
+      } else if (blendMode === 'weights') {
+        const weights = {};
+        PT_BLEND_MODELS.forEach(mk => {
+          const v = +el.querySelector(`[data-ptblend-weight="${mk}"]`).value;
+          if (v > 0) weights[mk] = v;
+        });
+        if (Object.keys(weights).length) { blendSpec = { mode: 'weights', weights }; blendActive = true; }
+      }
+
       const growthAny = Object.values(body).some(v => v != null && typeof v !== 'object');
-      if (!growthAny && !tamAny) {
+      if (!growthAny && !tamAny && !blendActive) {
         // Nothing to save — treat as clear
         await clearAssumptions(ticker, el);
         btn.disabled = false; btn.textContent = 'Save & Recompute';
         return;
       }
+      // Always send the pt_blend key so the explicit choice (set OR auto/clear) is recorded.
+      body.pt_blend = blendSpec;
       try {
         const r = await fetch(`${ASSUMPTIONS_BASE}/${ticker}`, {
           method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -2213,11 +2630,75 @@
   }
 
   // ── Per-ticker detail panel (inline expand) ──────────────────
-  const expanded = new Set();
-  function toggleDetail(ticker) {
-    if (expanded.has(ticker)) expanded.delete(ticker);
-    else expanded.add(ticker);
-    renderTopTable();
+  // v32 Phase 2b — single-selection model. The chosen ticker renders into the
+  // sticky analytics pane (replaces the old inline expand-row behavior, so
+  // clicking around no longer reflows the table).
+  let selectedTicker = null;
+  function highlightSelectedRow() {
+    document.querySelectorAll('#top-tbl tr.row-selected').forEach(r => r.classList.remove('row-selected'));
+    if (!selectedTicker) return;
+    const td = document.querySelector(`#top-tbl td.tkr[data-ticker="${selectedTicker}"]`);
+    if (td) td.closest('tr').classList.add('row-selected');
+  }
+  function clearPane() {
+    selectedTicker = null;
+    highlightSelectedRow();
+    const body = document.getElementById('pane-body');
+    const empty = document.getElementById('pane-empty');
+    if (body)  body.style.display = 'none';
+    if (empty) { empty.style.display = ''; empty.textContent =
+      'Click any ticker in the Top Tickers table to load its price chart, valuation breakdown, model weights, and editable assumptions here. It stays put while you scroll.'; }
+    const title = document.getElementById('pane-title'); if (title) title.textContent = 'Analytics';
+    const cb = document.getElementById('pane-close'); if (cb) cb.style.display = 'none';
+  }
+  function selectTicker(ticker) {
+    selectedTicker = ticker;
+    highlightSelectedRow();
+    renderAnalyticsPane();
+  }
+  function renderAnalyticsPane() {
+    const t = selectedTicker;
+    const body  = document.getElementById('pane-body');
+    const empty = document.getElementById('pane-empty');
+    const title = document.getElementById('pane-title');
+    const closeBtn = document.getElementById('pane-close');
+    if (!body) return;
+    if (!t) { clearPane(); return; }
+    const row = lastRows.find(r => r.ticker === t);
+    if (!row) {
+      empty.style.display = ''; body.style.display = 'none';
+      empty.textContent = `No live data for ${t} yet — it may not be in the current set.`;
+      return;
+    }
+    title.textContent = t;
+    closeBtn.style.display = '';
+    empty.style.display = 'none';
+    body.style.display = '';
+    body.innerHTML = renderDetailInner(row);
+    // Lazy-load the three async sub-panels for the selected ticker.
+    const hist = document.getElementById(`pred-history-${t}`);
+    if (hist) fetchPredictionHistory(t).then(d => {
+      const el = document.getElementById(`pred-history-${t}`);
+      if (el) el.innerHTML = d ? buildPredictionHistoryChart(d)
+        : '<div class="empty" style="padding:0.5rem;font-size:11px;color:var(--red)">history fetch failed — check sentiment_refresh_server on :8085</div>';
+    });
+    const aEl = document.getElementById(`assumptions-${t}`);
+    if (aEl) fetchAssumptions(t).then(d => renderAssumptionsPanelInto(aEl, t, d));
+    const rEl = document.getElementById(`regime-models-${t}`);
+    if (rEl) fetchRegimeModels(t).then(d => renderRegimeModelsInto(rEl, t, d));
+  }
+  // Live-refresh ONLY the chart + stats of the open pane on the 30s tick, so the
+  // price/levels stay current without clobbering in-progress assumption edits below.
+  function refreshPaneLive() {
+    if (!selectedTicker) return;
+    const live = document.getElementById('pane-live');
+    if (!live) return;
+    const row = lastRows.find(r => r.ticker === selectedTicker);
+    if (!row) return;
+    const chart  = buildSparkChart(row.bars || [], row.eod, row.livePx);
+    const stats  = buildStatsPanel(row);
+    const levels = buildLevelsStrip(row);
+    live.innerHTML = `<div class="detail-top"><div>${chart}</div><div>${stats}</div></div>${levels}`;
   }
 
   // ── SVG mini chart for a ticker ──────────────────────────────
@@ -2634,6 +3115,73 @@
     }
   }
 
+  // v34 — Compact correlations: pills of top strengthening / eroding pairs
+  function renderCorrelationsCompact() {
+    const wrap = document.getElementById('corr-compact');
+    if (!wrap) return;
+    if (!correlationsData) {
+      wrap.innerHTML = '<div class="empty">no correlation data — script may not have run yet</div>';
+      return;
+    }
+    const tickers = correlationsData.tickers || [];
+    const labels  = correlationsData.labels  || {};
+    const windows = correlationsData.windows || {};
+    const m30 = windows['30d']?.matrix;
+    const m1y = windows['1y']?.matrix;
+    if (!m30 || !m1y) {
+      wrap.innerHTML = '<div class="empty">need both 30d and 1y windows for delta view</div>';
+      return;
+    }
+    const pairs = [];
+    for (let i = 0; i < tickers.length; i++) {
+      for (let j = i + 1; j < tickers.length; j++) {
+        if (m30[i] == null || m1y[i] == null) continue;
+        const d30 = m30[i][j], d1y = m1y[i][j];
+        if (d30 == null || d1y == null) continue;
+        pairs.push({
+          a: tickers[i], b: tickers[j],
+          aLabel: labels[tickers[i]] || tickers[i],
+          bLabel: labels[tickers[j]] || tickers[j],
+          d30, d1y,
+          delta: d30 - d1y,
+        });
+      }
+    }
+    pairs.sort((x, y) => y.delta - x.delta);
+    const strengthening = pairs.filter(p => p.delta > 0.05).slice(0, 6);
+    const eroding       = pairs.filter(p => p.delta < -0.05).slice(-6).reverse();
+    function pillHtml(p) {
+      const cls = p.delta > 0 ? 'up' : 'dn';
+      const sign = p.delta > 0 ? '+' : '';
+      return `<span class="corr-pill" data-pair-a="${p.a}" data-pair-b="${p.b}" ` +
+             `title="${p.aLabel} ↔ ${p.bLabel}\n30d: ${p.d30.toFixed(2)}  ·  1y: ${p.d1y.toFixed(2)}\nclick to open full matrix">` +
+             `<span class="cp-pair">${p.a}↔${p.b}</span>` +
+             `<span class="cp-delta ${cls}">${sign}${p.delta.toFixed(2)}</span>` +
+             `<span class="cp-vals">(${p.d30.toFixed(2)} vs ${p.d1y.toFixed(2)})</span>` +
+             `</span>`;
+    }
+    let html = '';
+    html += `<div class="corr-section"><span class="corr-section-lbl">↑ Strengthening</span>`;
+    html += strengthening.length ? strengthening.map(pillHtml).join('') : '<span class="empty" style="font-size:11px">no pairs with Δ &gt; +0.05</span>';
+    html += `</div>`;
+    html += `<div class="corr-section"><span class="corr-section-lbl">↓ Eroding</span>`;
+    html += eroding.length ? eroding.map(pillHtml).join('') : '<span class="empty" style="font-size:11px">no pairs with Δ &lt; −0.05</span>';
+    html += `</div>`;
+    wrap.innerHTML = html;
+    // Click a pill → open full heatmap (auto-set window to delta mode)
+    wrap.querySelectorAll('.corr-pill').forEach(p => {
+      p.addEventListener('click', () => {
+        const fullWrap = document.getElementById('corr-full-wrap');
+        const btn = document.getElementById('corr-expand-btn');
+        fullWrap.classList.add('shown');
+        btn.textContent = 'Collapse matrix ▴';
+        correlationsWindow = 'delta';
+        document.querySelectorAll('[data-corr-win]').forEach(b => b.classList.toggle('active', b.dataset.corrWin === 'delta'));
+        renderCorrelationHeatmap();
+      });
+    });
+  }
+
   function renderCorrelationHeatmap() {
     const wrap = document.getElementById('heatmap-wrap');
     if (!correlationsData) {
@@ -3027,7 +3575,7 @@
       </div>
     `;
   }
-  function renderDetail(row) {
+  function renderDetailInner(row) {
     const f = row.fund || {};
     let detail = null;
     try { detail = f.pt_detail_json ? JSON.parse(f.pt_detail_json) : null; } catch (_) {}
@@ -3094,13 +3642,15 @@
         ${row.bbgName ? `<span style="color:var(--gold); font-weight:600; font-style:normal; margin-right:6px;">${row.bbgName}</span> · ` : ''}${row.description}
       </div>
     ` : '';
-    return `<tr class="detail-row"><td colspan="19">
+    return `
       ${descBlock}
-      <div class="detail-top">
-        <div>${chart}</div>
-        <div>${stats}</div>
+      <div id="pane-live">
+        <div class="detail-top">
+          <div>${chart}</div>
+          <div>${stats}</div>
+        </div>
+        ${levels}
       </div>
-      ${levels}
       ${catalysts}
       ${assumptionsPlaceholder}
       ${regimeModelsPlaceholder}
@@ -3116,8 +3666,7 @@
           <tr><th style="text-align:left">Model</th><th>PT</th><th>R²</th><th>Conviction</th><th>Weight</th><th style="text-align:left">Cap</th></tr>
         </thead><tbody>${modelRows}</tbody></table>
       </div>` : ''}
-      ${gates.length ? `<div style="padding:0.3rem 0">Gates: ${gateTags}</div>` : ''}
-    </td></tr>`;
+      ${gates.length ? `<div style="padding:0.3rem 0">Gates: ${gateTags}</div>` : ''}`;
   }
 
   // ── Render ────────────────────────────────────────────────────
@@ -3136,8 +3685,38 @@
         <td>${fmtVol(m.volNow)}</td>
       </tr>`;
   }
+  // v34 — Top movers ticker tape (replaces the panel-movers table)
+  // Shows TOP_N_TAPE biggest movers by |move|, ~half gainers, ~half losers
+  const TOP_N_TAPE = 30;
+  function renderMoversTape() {
+    const inner = document.getElementById('ticker-tape-inner');
+    if (!inner) return;
+    const all = lastRows.filter(r => r.move != null && Math.abs(r.move) > 0.0005);
+    if (!all.length) {
+      inner.innerHTML = '<span class="tape-item" style="color:var(--dim)">waiting for live data…</span>';
+      return;
+    }
+    // Take top by |move|, interleave gainers + losers so the tape alternates colors
+    const sortedByMag = all.slice().sort((a, b) => Math.abs(b.move) - Math.abs(a.move));
+    const sorted = sortedByMag.slice(0, TOP_N_TAPE);
+    const items = sorted.map(r => {
+      const cls = r.move > 0.0005 ? 'up' : (r.move < -0.0005 ? 'dn' : 'flat');
+      const sign = r.move > 0 ? '+' : '';
+      const px = r.livePx ? '$' + r.livePx.toFixed(2) : '—';
+      const pct = (r.move * 100).toFixed(2);
+      return `<span class="tape-item" data-ticker="${r.ticker}" title="Click to highlight in Top 40">` +
+             `<span class="t-sym">${r.ticker}</span>` +
+             `<span class="t-px">${px}</span>` +
+             `<span class="t-pct ${cls}">${sign}${pct}%</span>` +
+             `</span>`;
+    }).join('');
+    // Duplicate for seamless infinite loop
+    inner.innerHTML = items + items;
+  }
+
   function renderMoversTable() {
     const tbody = document.querySelector('#movers-tbl tbody');
+    if (!tbody) return;  // panel-movers is hidden in v34 — bail safely
     const all = lastRows.filter(r => r.move != null);
     if (!all.length) {
       tbody.innerHTML = '<tr><td colspan="6" class="empty">no overlap with watchlist yet</td></tr>';
@@ -3342,15 +3921,14 @@ Signal: ${m.insSignal ?? 'neutral'}`;
           <td><button class="pdf-btn" data-report="${m.ticker}" title="Generate 1-page valuation report (rubric + LLM summary, Save as PDF)">📄</button></td>
         </tr>
       `);
-      if (expanded.has(m.ticker)) html.push(renderDetail(m));
     });
     tbody.innerHTML = html.join('');
-    // Re-attach click handlers on the ticker cells
+    // Re-attach click handlers on the ticker cells → load into the sticky pane
     tbody.querySelectorAll('td.tkr[data-ticker]').forEach(td => {
       td.addEventListener('click', (e) => {
-        // Star click should NOT also expand the row
+        // Star click should NOT also select the row
         if (e.target.closest('.star-btn')) return;
-        toggleDetail(td.dataset.ticker);
+        selectTicker(td.dataset.ticker);
       });
     });
     // Star click: toggle pin (delegated; works for both Top 40 and Movers)
@@ -3367,32 +3945,11 @@ Signal: ${m.insSignal ?? 'neutral'}`;
         openReport(b.dataset.report, b);
       });
     });
-    // Lazy-load prediction history charts for any expanded tickers
-    expanded.forEach(ticker => {
-      const placeholder = document.getElementById(`pred-history-${ticker}`);
-      if (!placeholder || placeholder.dataset.loaded === '1') return;
-      placeholder.dataset.loaded = '1';
-      fetchPredictionHistory(ticker).then(data => {
-        const el = document.getElementById(`pred-history-${ticker}`);
-        if (el) el.innerHTML = data
-          ? buildPredictionHistoryChart(data)
-          : '<div class="empty" style="padding:0.5rem;font-size:11px;color:var(--red)">history fetch failed — check sentiment_refresh_server is running on port 8085</div>';
-      });
-    });
-    // Lazy-load the per-ticker Assumptions panel (sliders + recomputed PT)
-    expanded.forEach(ticker => {
-      const el = document.getElementById(`assumptions-${ticker}`);
-      if (!el || el.dataset.loaded === '1') return;
-      el.dataset.loaded = '1';
-      fetchAssumptions(ticker).then(d => renderAssumptionsPanelInto(el, ticker, d));
-    });
-    // v29.8 — Lazy-load the per-ticker Regime-Best-Models panel
-    expanded.forEach(ticker => {
-      const el = document.getElementById(`regime-models-${ticker}`);
-      if (!el || el.dataset.loaded === '1') return;
-      el.dataset.loaded = '1';
-      fetchRegimeModels(ticker).then(d => renderRegimeModelsInto(el, ticker, d));
-    });
+    // v32 Phase 2b — selection now lives in the sticky pane, not inline rows.
+    // Re-apply the selected-row highlight (tbody was just rebuilt) and refresh
+    // the pane's live chart/stats with the freshest bars.
+    highlightSelectedRow();
+    refreshPaneLive();
     const counts = rows.reduce((acc, r) => {
       const k = r.action?.l || 'NOISE';
       acc[k] = (acc[k] || 0) + 1; return acc;
@@ -3416,7 +3973,10 @@ Signal: ${m.insSignal ?? 'neutral'}`;
       return lastFundamentals;
     }
     try {
-      const r = await fetch(UNIVERSE_CSV_URL + '?_=' + now, { cache: 'no-cache' });
+      // v33 — compounders mode swaps the ranking source to the parallel CSV.
+      // Same column schema (composite_score etc.) so existing render logic works.
+      const csv_url = (panelMode === 'compounders') ? COMPOUNDERS_CSV_URL : UNIVERSE_CSV_URL;
+      const r = await fetch(csv_url + '?_=' + now, { cache: 'no-cache' });
       if (!r.ok) throw new Error('universe ' + r.status);
       const rows = parseCsv(await r.text());
       // Sort by composite_score desc to assign rank
@@ -3482,14 +4042,45 @@ Signal: ${m.insSignal ?? 'neutral'}`;
   // ── Main refresh tick ─────────────────────────────────────────
   async function refresh() {
     try {
-      const [bbgR, fundamentals, bias, finnhub] = await Promise.all([
+      const [bbgR, streamR, fundamentals, bias, finnhub] = await Promise.all([
         fetch(PRICES_URL + '?_=' + Date.now(), { cache: 'no-cache' }),
+        fetch(STREAM_URL + '?_=' + Date.now(), { cache: 'no-cache' }).catch(() => null),
         fetchFundamentals(),
         fetchMarketBias(),
         fetchFinnhub(),
       ]);
       if (!bbgR.ok) throw new Error('bbg ' + bbgR.status);
       const bbg = await bbgR.json();
+
+      // ── Live-tick overlay ────────────────────────────────────
+      // If bloomberg_stream.json is fresh, replace `price` on each ticker
+      // with the streamed LAST_PRICE. Indicators (RSI/SMA/etc) stay from
+      // the hourly puller — they lag the live price, which is OK.
+      let streamAgeS = null;
+      let streamCount = 0;
+      if (streamR && streamR.ok) {
+        try {
+          const stream = await streamR.json();
+          streamAgeS = (Date.now() - new Date(stream.generated_at).getTime()) / 1000;
+          if (streamAgeS >= 0 && streamAgeS < STREAM_FRESH_S && stream.tickers) {
+            for (const [bbgSec, fields] of Object.entries(stream.tickers)) {
+              // Stream uses BBG security strings ("AAPL US Equity"); the
+              // hourly puller uses bare tickers ("AAPL"). Strip the suffix.
+              const tkr = bbgSec.replace(/ (US Equity|Index)$/i, '');
+              const live = fields.LAST_PRICE;
+              if (live != null && bbg.tickers && bbg.tickers[tkr]) {
+                bbg.tickers[tkr].price = live;
+                bbg.tickers[tkr]._live = true;
+                if (fields.BID != null) bbg.tickers[tkr]._bid = fields.BID;
+                if (fields.ASK != null) bbg.tickers[tkr]._ask = fields.ASK;
+                streamCount++;
+              }
+            }
+          }
+        } catch (e) { console.warn('stream parse failed', e); }
+      }
+      // Surface the live-tick state to the header (rendered below)
+      window.__streamState = { ageS: streamAgeS, count: streamCount };
 
       const spy = bbg.tickers?.SPY || {};
       const vix = bbg.tickers?.VIX || {};
@@ -3532,7 +4123,19 @@ Signal: ${m.insSignal ?? 'neutral'}`;
           'Composite: ' + ((bias.composite ?? 0).toFixed(3)) + '\n' +
           'Confidence: ' + Math.round(conf) + '% (label suppressed to NEUTRAL if < 60%)';
       }
-      document.getElementById('age').textContent = 'BBG ' + ageStr(bbg.generated_at);
+      // Show BBG hourly age + live stream overlay status side-by-side
+      const ageEl = document.getElementById('age');
+      let ageText = 'BBG ' + ageStr(bbg.generated_at);
+      const ss = window.__streamState;
+      if (ss && ss.ageS != null && ss.ageS < STREAM_FRESH_S) {
+        const liveS = Math.round(ss.ageS);
+        ageText += ` · 🟢 LIVE ${liveS}s (${ss.count})`;
+      } else if (ss && ss.ageS != null) {
+        ageText += ` · ⚫ stream stale (${Math.round(ss.ageS)}s)`;
+      } else {
+        ageText += ` · ⚫ stream off`;
+      }
+      ageEl.textContent = ageText;
 
       const watchlist = bbg.watchlist || {};
       // v29.4 — BBG-pulled company descriptions (CIE_DES), keyed by ticker
@@ -3608,6 +4211,7 @@ Signal: ${m.insSignal ?? 'neutral'}`;
       });
       lastRows = enriched;
       renderMoversTable();
+      renderMoversTape();   // v34 — populate ticker tape
       renderTopTable();
       updateFedRateDisplay();
     } catch (e) {
@@ -3785,9 +4389,159 @@ Signal: ${m.insSignal ?? 'neutral'}`;
     if (b.dataset.corrWin === correlationsWindow) b.classList.add('active');
     else b.classList.remove('active');
   });
-  fetchCorrelations().then(() => renderCorrelationHeatmap());
+  fetchCorrelations().then(() => { renderCorrelationsCompact(); renderCorrelationHeatmap(); });
   // Refresh every 6h (data only updates daily after Sharadar)
-  setInterval(() => fetchCorrelations().then(() => renderCorrelationHeatmap()), 6 * 3600 * 1000);
+  setInterval(() => fetchCorrelations().then(() => { renderCorrelationsCompact(); renderCorrelationHeatmap(); }), 6 * 3600 * 1000);
+
+  // v34 — BBG Start-of-Day status pill + popover + manual restart
+  const BBG_HEARTBEAT_URL = '/bbg_heartbeat.json';
+  const BBG_STREAM_URL    = '/bloomberg_stream.json';
+  async function updateBbgStatus() {
+    const dot  = document.getElementById('bbg-status-dot');
+    const text = document.getElementById('bbg-status-text');
+    if (!dot || !text) return;
+    let heartbeat = null;
+    let stream = null;
+    try {
+      const r = await fetch(BBG_HEARTBEAT_URL + '?_=' + Date.now(), { cache: 'no-cache' });
+      if (r.ok) heartbeat = await r.json();
+    } catch (e) { /* ignore */ }
+    try {
+      const r = await fetch(BBG_STREAM_URL + '?_=' + Date.now(), { cache: 'no-cache' });
+      if (r.ok) stream = await r.json();
+    } catch (e) { /* ignore */ }
+    // Decide state: green if stream snapshot < 2 min, yellow if 2-10 min, red otherwise
+    let streamAgeS = null;
+    if (stream && stream.generated_at) {
+      streamAgeS = (Date.now() - new Date(stream.generated_at).getTime()) / 1000;
+    }
+    let color, label;
+    if (streamAgeS != null && streamAgeS < 120) {
+      color = '#00c97a'; label = 'live ' + Math.round(streamAgeS) + 's';
+    } else if (streamAgeS != null && streamAgeS < 600) {
+      color = '#f0d94c'; label = 'stale ' + Math.round(streamAgeS / 60) + 'm';
+    } else if (heartbeat && heartbeat.bbg_up === false) {
+      color = '#ff4d4d'; label = 'waiting BBG';
+    } else {
+      color = '#ff4d4d'; label = 'down';
+    }
+    dot.style.background = color;
+    text.textContent = label;
+    // Cache for the popover
+    window.__bbgState = { heartbeat, stream, streamAgeS };
+  }
+  function renderBbgPopover(extra) {
+    const body = document.getElementById('bbg-popover-body');
+    const s = window.__bbgState || {};
+    const hb = s.heartbeat;
+    let lines = [];
+    if (hb && hb.timestamp) {
+      const hbAgeMin = ((Date.now() - new Date(hb.timestamp).getTime()) / 60000).toFixed(1);
+      lines.push(`<div><strong>Last check:</strong> ${hbAgeMin} min ago</div>`);
+      lines.push(`<div><strong>BBG terminal:</strong> ${hb.bbg_up ? '🟢 up' : '🔴 not logged in'}</div>`);
+      if (hb.stream_action) lines.push(`<div><strong>Last action:</strong> ${hb.stream_action}</div>`);
+      if (hb.detail) lines.push(`<div style="color:var(--dim);font-size:11px;margin-top:4px">${hb.detail}</div>`);
+    } else {
+      lines.push(`<div style="color:var(--dim)">No heartbeat yet today.</div>`);
+      lines.push(`<div style="color:var(--dim);font-size:11px;margin-top:4px">Daily auto-check fires at 07:15 ET Mon-Fri.</div>`);
+    }
+    if (s.streamAgeS != null) {
+      lines.push(`<div style="margin-top:6px"><strong>Stream snapshot:</strong> ${Math.round(s.streamAgeS)}s ago</div>`);
+    } else {
+      lines.push(`<div style="margin-top:6px;color:var(--red)">No stream snapshot found.</div>`);
+    }
+    if (extra) lines.push(`<div style="margin-top:6px;color:var(--gold)">${extra}</div>`);
+    body.innerHTML = lines.join('');
+  }
+  document.getElementById('bbg-status-chip').addEventListener('click', () => {
+    const pop = document.getElementById('bbg-popover');
+    const showing = pop.style.display === 'block';
+    pop.style.display = showing ? 'none' : 'block';
+    if (!showing) renderBbgPopover();
+  });
+  document.getElementById('bbg-popover-close').addEventListener('click', () => {
+    document.getElementById('bbg-popover').style.display = 'none';
+  });
+  document.getElementById('bbg-restart-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('bbg-restart-btn');
+    btn.disabled = true;
+    btn.textContent = 'Triggering…';
+    renderBbgPopover('Sending /bbg-start-of-day to Windows…');
+    try {
+      const r = await fetch('http://' + location.hostname + ':8085/bbg-start-of-day', {
+        method: 'POST', cache: 'no-cache',
+      });
+      const j = await r.json();
+      // The server returns the new heartbeat too — refresh our local state
+      await updateBbgStatus();
+      const note = j.trigger_ok
+        ? '✅ Triggered — ' + (j.heartbeat?.stream_action || 'check Windows log')
+        : '❌ Failed: ' + (j.trigger_msg || 'see server log');
+      renderBbgPopover(note);
+    } catch (e) {
+      renderBbgPopover('❌ Error: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Trigger Start-of-Day';
+    }
+  });
+  updateBbgStatus();
+  setInterval(updateBbgStatus, 60 * 1000);
+
+  // v34 — Expand/Collapse correlations matrix
+  document.getElementById('corr-expand-btn').addEventListener('click', () => {
+    const fullWrap = document.getElementById('corr-full-wrap');
+    const btn = document.getElementById('corr-expand-btn');
+    const shown = fullWrap.classList.toggle('shown');
+    btn.textContent = shown ? 'Collapse matrix ▴' : 'Expand matrix ▾';
+    if (shown) renderCorrelationHeatmap();
+  });
+
+  // ── v32 Phase 2b — tab framework ──────────────────────────────
+  // The four panels are built once inside #legacy-panels; move them into the
+  // correct tab containers on load (avoids duplicating large markup).
+  (function placePanels() {
+    const tm   = document.getElementById('tickers-main');
+    const cc   = document.getElementById('corr-container');
+    const top  = document.querySelector('.panel-top');
+    const lb   = document.querySelector('.panel-leaderboard');
+    const mv   = document.querySelector('.panel-movers');
+    const corr = document.querySelector('.panel-correlations');
+    if (tm && top)  tm.appendChild(top);
+    if (tm && lb)   tm.appendChild(lb);
+    if (cc && mv)   cc.appendChild(mv);
+    if (cc && corr) cc.appendChild(corr);
+  })();
+  function setTab(name) {
+    document.querySelectorAll('.tab-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.tab === name));
+    document.querySelectorAll('.tab-panel').forEach(p =>
+      p.classList.toggle('active', p.id === `tab-${name}`));
+    // The correlation widgets need a laid-out (visible) container to size
+    // correctly, so (re)draw them when their tab becomes active.
+    if (name === 'corr') {
+      renderCorrelationsCompact();
+      const fw = document.getElementById('corr-full-wrap');
+      if (fw && fw.classList.contains('shown')) renderCorrelationHeatmap();
+    }
+    if (name === 'markouts' && window.MK) window.MK.ensureLoaded();
+  }
+  document.querySelectorAll('.tab-btn').forEach(b =>
+    b.addEventListener('click', () => setTab(b.dataset.tab)));
+  document.getElementById('pane-close').addEventListener('click', clearPane);
+
+  // v34/v32 — Ticker tape click → switch to Top Tickers tab, select in the pane
+  document.getElementById('ticker-tape').addEventListener('click', (e) => {
+    const item = e.target.closest('.tape-item');
+    if (!item) return;
+    const t = item.dataset.ticker;
+    if (!t) return;
+    setTab('tickers');
+    selectTicker(t);
+    const td = document.querySelector(`#top-tbl td.tkr[data-ticker="${t}"]`);
+    const row = td ? td.closest('tr') : null;
+    if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
 
   // ── Leaderboard: load once, refresh hourly (computed daily on server) ──
   fetchLeaderboard().then(() => renderLeaderboard());
@@ -3823,6 +4577,35 @@ Signal: ${m.insSignal ?? 'neutral'}`;
     Promise.all([loadPinned(), loadAssumptions()]).then(syncToolbarUI);
   }, 5 * 60 * 1000);
   setInterval(refresh, REFRESH_MS);
+
+  // v33 — Compounders/Momentum mode toggle
+  function setMode(mode) {
+    panelMode = mode;
+    const momBtn = document.getElementById('mode-momentum');
+    const cmpBtn = document.getElementById('mode-compounders');
+    const title  = document.getElementById('top40-title');
+    if (mode === 'compounders') {
+      momBtn.style.background = 'var(--panel2)';
+      momBtn.style.color = 'var(--gold2)';
+      momBtn.style.border = '1px solid var(--gold2)';
+      cmpBtn.style.background = 'var(--gold)';
+      cmpBtn.style.color = '#0d0d0d';
+      cmpBtn.style.border = 'none';
+      title.textContent = 'Top 40 — Compounders (Fundamentals + Long-Term Trend)';
+    } else {
+      cmpBtn.style.background = 'var(--panel2)';
+      cmpBtn.style.color = 'var(--gold2)';
+      cmpBtn.style.border = '1px solid var(--gold2)';
+      momBtn.style.background = 'var(--gold)';
+      momBtn.style.color = '#0d0d0d';
+      momBtn.style.border = 'none';
+      title.textContent = 'Top 40 — Fundamental + Predictive Action';
+    }
+    universeFetchedAt = 0;  // force fresh universe fetch on next refresh
+    refresh();
+  }
+  document.getElementById('mode-momentum').addEventListener('click', () => setMode('momentum'));
+  document.getElementById('mode-compounders').addEventListener('click', () => setMode('compounders'));
 })();
 </script>
 
@@ -3833,6 +4616,641 @@ Signal: ${m.insSignal ?? 'neutral'}`;
   <button class="rep-close" id="rep-close">Close</button>
   <div id="rep-body"></div>
 </div>
+
+<!-- ═══ Markouts (Phase 2b-2): inline, re-skinned to dark/gold theme ═══ -->
+<style>
+  .mk-view { font-size: 13px; color: var(--text); }
+  .mk-empty { color: var(--dim); text-align: center; }
+  .mk-header { display: flex; justify-content: space-between; align-items: flex-start;
+               gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+  .mk-h1 { font-size: 20px; font-weight: 600; color: var(--gold); display: flex;
+           align-items: baseline; gap: 8px; letter-spacing: .5px; }
+  .mk-version { font-size: 11px; color: var(--gold2); background: rgba(201,168,76,0.14);
+                padding: 2px 8px; border-radius: 4px; font-weight: 500; }
+  .mk-subtitle { font-size: 12px; color: var(--dim); margin-top: 4px; }
+  .mk-header-meta { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+  #mk-generated-at { color: var(--dim); font-family: monospace; font-size: 11px; }
+  .mk-pill { background: var(--panel2); border: 1px solid var(--border); padding: 4px 10px;
+             border-radius: 4px; font-family: monospace; font-size: 11px; color: var(--dim); }
+  .mk-btn { background: var(--gold); color: #0a0a0a; border: none; padding: 7px 14px;
+            border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600;
+            font-family: inherit; transition: background .15s; }
+  .mk-btn:hover { background: var(--gold2); }
+  .mk-btn-sec { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
+  .mk-btn-sec:hover { background: #222; }
+
+  .mk-banner { background: var(--panel2); border-left: 3px solid var(--gold);
+               padding: 10px 16px; border-radius: 4px; font-size: 12px; margin-bottom: 14px;
+               display: flex; flex-direction: column; gap: 4px; }
+  .mk-banner strong { color: var(--text); }
+  .mk-banner code { color: var(--gold2); font-family: monospace; }
+
+  .mk-quick-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+                    gap: 10px; margin-bottom: 14px; }
+  .mk-qs { background: var(--panel); border: 1px solid var(--border); padding: 10px 14px;
+           border-radius: 8px; text-align: center; }
+  .mk-qs-v { font-size: 20px; font-weight: 700; font-family: monospace; line-height: 1.2; color: var(--text); }
+  .mk-qs-v.pos { color: var(--green); } .mk-qs-v.neg { color: var(--red); }
+  .mk-qs-l { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .5px; margin-top: 2px; }
+
+  .mk-champion-board { background: linear-gradient(135deg, rgba(201,168,76,0.08) 0%, rgba(10,10,10,0) 100%);
+                       border: 1px solid rgba(201,168,76,0.25); border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+  .mk-section-header { display: flex; justify-content: space-between; align-items: baseline;
+                       margin-bottom: 10px; flex-wrap: wrap; gap: 8px; }
+  .mk-section-header h3 { font-size: 14px; font-weight: 600; color: var(--gold); }
+  .mk-note { font-size: 11px; color: var(--dim); }
+  .mk-champion-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+  .mk-cc { background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+           padding: 10px 14px; cursor: pointer; transition: transform .15s, border-color .15s; }
+  .mk-cc:hover { transform: translateY(-2px); border-color: var(--green); }
+  .mk-cc-rank { font-size: 10px; color: var(--dim); font-weight: 500; }
+  .mk-cc-name { font-weight: 600; font-size: 13px; margin: 2px 0; font-family: monospace; color: var(--text); }
+  .mk-cc-meta { font-size: 10px; color: var(--dim); font-family: monospace; }
+  .mk-cc-stats { display: flex; justify-content: space-between; margin-top: 6px; font-family: monospace; font-size: 12px; }
+
+  .mk-toolbar { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+                padding: 14px; margin-bottom: 14px; }
+  .mk-filter-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+  .mk-filter-row + .mk-filter-row { margin-top: 10px; }
+  .mk-fgroup { display: flex; flex-direction: column; gap: 4px; }
+  .mk-fgroup label { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .5px; }
+  .mk-fgroup input, .mk-fgroup select { background: var(--bg); border: 1px solid var(--border);
+            color: var(--text); padding: 6px 10px; border-radius: 4px; font-size: 12px; min-width: 140px; font-family: inherit; }
+  .mk-tier-label { font-size: 11px; color: var(--dim); margin-right: 6px; }
+  .mk-tier-btn, .mk-tf-btn { background: var(--bg); border: 1px solid var(--border); color: var(--dim);
+            padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 11px; transition: all .15s; font-family: inherit; }
+  .mk-tier-btn:hover, .mk-tf-btn:hover { background: #222; color: var(--text); }
+  .mk-tier-btn.active, .mk-tf-btn.active { background: var(--gold); border-color: var(--gold); color: #0a0a0a; font-weight: 600; }
+  .mk-cb { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--dim); cursor: pointer; }
+  .mk-summary { margin-left: auto; font-size: 11px; color: var(--dim); font-family: monospace; }
+
+  .mk-model-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+  .mk-card { background: var(--panel); border: 1px solid var(--border); border-left: 4px solid var(--dim);
+             border-radius: 8px; padding: 14px; cursor: pointer;
+             transition: transform .15s, border-color .15s, box-shadow .15s; position: relative; }
+  .mk-card:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,0.4); background: var(--panel2); }
+  .mk-card.tier-hot { border-left-color: var(--green); }
+  .mk-card.tier-warm { border-left-color: var(--gold); }
+  .mk-card.tier-cold { border-left-color: var(--red); }
+  .mk-card.tier-gray { border-left-color: var(--dim); }
+  .mk-card-h { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
+  .mk-card-name { font-weight: 600; font-size: 14px; font-family: monospace; color: var(--text); }
+  .mk-badges { display: flex; gap: 4px; flex-shrink: 0; align-items: center; }
+  .mk-badge { padding: 2px 7px; border-radius: 10px; font-size: 10px; font-weight: 600; }
+  .mk-badge.streak-hot { background: rgba(0,201,122,0.2); color: var(--green); }
+  .mk-badge.streak-cold { background: rgba(255,77,77,0.2); color: var(--red); }
+  .mk-badge.champion { background: rgba(201,168,76,0.2); color: var(--gold2); }
+  .mk-card-desc { font-size: 11px; color: var(--dim); margin-bottom: 10px; min-height: 30px; }
+  .mk-card-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 10px; }
+  .mk-metric { background: var(--bg); border-radius: 6px; padding: 6px 8px; text-align: center; }
+  .mk-metric-l { font-size: 9px; color: var(--dim); text-transform: uppercase; letter-spacing: .3px; }
+  .mk-metric-v { font-family: monospace; font-size: 13px; font-weight: 600; margin-top: 1px; color: var(--text); }
+  .mk-metric-v.pos { color: var(--green); } .mk-metric-v.neg { color: var(--red); }
+  .mk-bw { display: flex; justify-content: space-between; font-family: monospace; font-size: 10px;
+           margin-bottom: 6px; padding: 4px 6px; background: var(--bg); border-radius: 4px; }
+  .mk-bw .lbl { color: var(--dim); } .mk-bw .pos { color: var(--green); } .mk-bw .neg { color: var(--red); }
+  .mk-card-f { font-size: 10px; color: var(--dim); padding-top: 6px; border-top: 1px solid var(--border);
+               display: flex; justify-content: space-between; font-family: monospace; }
+
+  .mk-tooltip { position: absolute; background: var(--panel2); border: 1px solid var(--border);
+                border-radius: 8px; padding: 14px; font-size: 11px; max-width: 380px; z-index: 9999;
+                pointer-events: none; box-shadow: 0 8px 24px rgba(0,0,0,0.55); line-height: 1.6; }
+  .mk-tooltip h4 { font-size: 12px; color: var(--gold2); margin-bottom: 6px; font-family: monospace; }
+  .mk-tt-sec { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+  .mk-tt-sec:first-of-type { margin-top: 0; padding-top: 0; border-top: 0; }
+  .mk-tt-l { color: var(--dim); font-size: 9px; text-transform: uppercase; letter-spacing: .3px; }
+  .mk-tt-v { color: var(--text); font-size: 11px; margin-bottom: 4px; }
+  .mk-tt-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; font-family: monospace; }
+
+  .mk-detail-badges { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+  .mk-db { background: var(--panel2); border: 1px solid var(--border); padding: 6px 12px; border-radius: 6px;
+           font-size: 11px; font-family: monospace; display: inline-flex; align-items: center; gap: 6px; color: var(--text); }
+  .mk-db .lbl { color: var(--dim); }
+  .mk-db.streak-hot { border-color: var(--green); background: rgba(0,201,122,0.12); }
+  .mk-db.streak-cold { border-color: var(--red); background: rgba(255,77,77,0.12); }
+  .mk-db.champion { border-color: var(--gold); background: rgba(201,168,76,0.12); }
+  .mk-detail-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .mk-dm { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
+  .mk-dm-l { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .4px;
+             display: flex; justify-content: space-between; align-items: baseline; }
+  .mk-dm-l .wtag { font-size: 9px; color: var(--dim); background: var(--bg); padding: 1px 6px; border-radius: 3px; font-family: monospace; }
+  .mk-dm-v { font-size: 20px; font-weight: 700; font-family: monospace; margin-top: 4px; color: var(--text); }
+  .mk-dm-v.pos { color: var(--green); } .mk-dm-v.neg { color: var(--red); }
+  .mk-dm-s { font-size: 10px; color: var(--dim); margin-top: 2px; font-family: monospace; }
+  .mk-detail-strip { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+  .mk-strip { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  .mk-strip h4 { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .4px; margin-bottom: 10px; }
+  .mk-rs { display: flex; justify-content: space-between; font-family: monospace; font-size: 13px; margin-bottom: 4px; }
+  .mk-rs .lbl { color: var(--dim); } .mk-rs .val.pos { color: var(--green); } .mk-rs .val.neg { color: var(--red); }
+
+  .mk-chart-block { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+  .mk-chart-title { font-size: 13px; font-weight: 500; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: baseline; color: var(--text); }
+  #mk-chart-equity svg { width: 100%; height: auto; display: block; }
+  .mk-chart-empty { padding: 20px; color: var(--dim); text-align: center; }
+
+  .mk-trade-section { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+  .mk-trade-filter-bar { display: flex; gap: 6px; flex-wrap: wrap; }
+  .mk-table-scroll { overflow-x: auto; max-height: 600px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; }
+  .mk-table { width: 100%; border-collapse: collapse; font-family: monospace; font-size: 12px; }
+  .mk-table thead { position: sticky; top: 0; background: var(--panel2); z-index: 1; }
+  .mk-table th { padding: 8px 10px; text-align: left; font-weight: 500; color: var(--dim);
+                 border-bottom: 1px solid var(--border); font-size: 10px; text-transform: uppercase;
+                 letter-spacing: .3px; white-space: nowrap; }
+  .mk-table th.numeric { text-align: right; }
+  .mk-table th.mk-sortable { cursor: pointer; user-select: none; }
+  .mk-table th.mk-sortable:hover { color: var(--text); }
+  .mk-table th.mk-sortable::after { content: ' ⇅'; opacity: .3; }
+  .mk-table th.sort-asc::after { content: ' ▲'; opacity: 1; color: var(--gold2); }
+  .mk-table th.sort-desc::after { content: ' ▼'; opacity: 1; color: var(--gold2); }
+  .mk-table td { padding: 6px 10px; border-bottom: 1px solid rgba(38,38,38,0.6); white-space: nowrap; color: var(--text); }
+  .mk-table td.numeric { text-align: right; }
+  .mk-table tbody tr:hover { background: rgba(201,168,76,0.05); }
+  .mk-table .win { color: var(--green); } .mk-table .loss { color: var(--red); }
+  .mk-table .dir-long { color: var(--blue); font-weight: 600; }
+  .mk-table .dir-short { color: var(--purple); font-weight: 600; }
+  .mk-table .missing { color: var(--dim); font-style: italic; }
+
+  .mk-footer { display: flex; justify-content: space-between; font-size: 10px; color: var(--dim);
+               padding: 14px 0; border-top: 1px solid var(--border); margin-top: 20px; flex-wrap: wrap; gap: 8px; }
+  .mk-footer code { color: var(--gold2); font-family: monospace; }
+
+  @media (max-width: 900px) {
+    .mk-quick-stats { grid-template-columns: repeat(2, 1fr); }
+    .mk-model-grid { grid-template-columns: 1fr; }
+    .mk-card-metrics { grid-template-columns: repeat(2, 1fr); }
+    .mk-detail-metrics { grid-template-columns: repeat(2, 1fr); }
+    .mk-detail-strip { grid-template-columns: 1fr; }
+  }
+</style>
+<script>
+(function () {
+  "use strict";
+  const MK = {
+    data: null, loaded: false, loading: false,
+    filtered: [], slippage: '5bps', sortKey: 'streak', tier: 'all',
+    championsOnly: false, hasTrades: true,
+    tradeFilter: 'all', tradeSortKey: 'exit_time', tradeSortDir: 'desc',
+    currentModel: null,
+  };
+  const $ = (id) => document.getElementById(id);
+
+  // ── formatters ──
+  function fmtPct(v, dec = 2) {
+    if (v === null || v === undefined || Number.isNaN(v)) return '—';
+    return (v * 100).toFixed(dec) + '%';
+  }
+  function fmtNum(v, dec = 1) {
+    if (v === null || v === undefined || Number.isNaN(v)) return '—';
+    return v.toFixed(dec);
+  }
+  function fmtMoney(v) {
+    if (v === null || v === undefined || Number.isNaN(v)) return '—';
+    const sign = v < 0 ? '-' : '';
+    return sign + '$' + Math.abs(v).toLocaleString('en-US', { maximumFractionDigits: 0 });
+  }
+  function fmtPrice(v) {
+    if (v === null || v === undefined || Number.isNaN(v)) return '<span class="missing">—</span>';
+    return '$' + v.toFixed(2);
+  }
+  function fmtHold(mins) {
+    if (mins === null || mins === undefined || Number.isNaN(mins)) return '—';
+    if (mins < 60) return Math.round(mins) + 'm';
+    const h = Math.floor(mins / 60), m = Math.round(mins - h * 60);
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  }
+  function fmtTs(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    const p = (n) => String(n).padStart(2, '0');
+    return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+  function fmtRelative(iso) {
+    if (!iso) return 'never';
+    const t = new Date(iso).getTime();
+    if (Number.isNaN(t)) return '—';
+    const s = Math.floor((Date.now() - t) / 1000);
+    if (s < 60) return `${s}s ago`;
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+    if (s < 86400 * 7) return `${Math.floor(s / 86400)}d ago`;
+    return new Date(iso).toLocaleDateString();
+  }
+  function clsSign(v) { return v > 0 ? 'pos' : (v < 0 ? 'neg' : ''); }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+  // ── metric helpers ──
+  const getReturn = (m) => m.summary?.[MK.slippage]?.cum_return ?? 0;
+  const getSharpe = (m) => m.summary?.[MK.slippage]?.sharpe ?? 0;
+  const getMaxDD  = (m) => m.summary?.[MK.slippage]?.max_dd ?? 0;
+  const getStreak = (m) => m.current_streak ?? 0;
+  function getTier(m) {
+    if ((m.n_trades || 0) < 10) return 'gray';
+    const ret = getReturn(m), sh = getSharpe(m), st = getStreak(m);
+    if (st >= 3 || (sh > 1.5 && ret > 0.005)) return 'hot';
+    if (st <= -2 || (ret < -0.01 && sh < 0)) return 'cold';
+    return 'warm';
+  }
+  function streakBadge(st) {
+    if (st >= 3) return `<span class="mk-badge streak-hot">🔥 ${st}W</span>`;
+    if (st > 0)  return `<span class="mk-badge streak-hot">✓ ${st}W</span>`;
+    if (st <= -3) return `<span class="mk-badge streak-cold">❄ ${-st}L</span>`;
+    if (st < 0)  return `<span class="mk-badge streak-cold">${-st}L</span>`;
+    return '';
+  }
+  const championBadge = (m) => m.is_champion ? `<span class="mk-badge champion">★</span>` : '';
+
+  // ── data load ──
+  async function loadData() {
+    MK.loading = true;
+    try {
+      const r = await fetch('/markouts.json?t=' + Date.now());
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      MK.data = await r.json();
+    } catch (err) {
+      MK.loading = false;
+      $('mk-loading').style.display = 'block';
+      $('mk-loading').innerHTML = `Failed to load markouts.json — ${esc(err.message)}.<br>Check markout_eval_publish.py.`;
+      $('mk-grid').style.display = 'none';
+      $('mk-detail').style.display = 'none';
+      return;
+    }
+    MK.loading = false;
+    MK.loaded = true;
+    $('mk-loading').style.display = 'none';
+    showGrid();
+  }
+
+  function showGrid() {
+    $('mk-detail').style.display = 'none';
+    $('mk-grid').style.display = 'block';
+    renderGrid();
+  }
+
+  // ── grid ──
+  function renderGrid() {
+    const d = MK.data;
+    $('mk-generated-at').textContent = 'Generated ' + (d.generated_at ? new Date(d.generated_at).toLocaleString() : 'unknown');
+    $('mk-lookback-pill').textContent = `${d.lookback_days}d window`;
+    $('mk-metrics-window').textContent = `${d.lookback_days} trading days`;
+    $('mk-slip-bps').textContent = MK.slippage.replace('bps', ' bps');
+
+    const families = [...new Set(d.models.map(m => m.family))].filter(Boolean).sort();
+    const famSel = $('mk-family');
+    if (famSel.options.length <= 1) {
+      families.forEach(f => {
+        const o = document.createElement('option');
+        o.value = f; o.textContent = f.replace(/_/g, ' ');
+        famSel.appendChild(o);
+      });
+    }
+
+    $('mk-search').oninput = applyFilters;
+    $('mk-family').onchange = applyFilters;
+    $('mk-slippage').onchange = (e) => { MK.slippage = e.target.value; $('mk-slip-bps').textContent = MK.slippage.replace('bps', ' bps'); applyFilters(); };
+    $('mk-sort').onchange = (e) => { MK.sortKey = e.target.value; applyFilters(); };
+    $('mk-champions').onchange = (e) => { MK.championsOnly = e.target.checked; applyFilters(); };
+    $('mk-has-trades').onchange = (e) => { MK.hasTrades = e.target.checked; applyFilters(); };
+    document.querySelectorAll('.mk-tier-btn').forEach(b => {
+      b.onclick = () => {
+        document.querySelectorAll('.mk-tier-btn').forEach(x => x.classList.remove('active'));
+        b.classList.add('active'); MK.tier = b.dataset.tier; applyFilters();
+      };
+    });
+    $('mk-refresh').onclick = () => loadData();
+    applyFilters();
+  }
+
+  function applyFilters() {
+    const d = MK.data;
+    const q = $('mk-search').value.toLowerCase().trim();
+    const fam = $('mk-family').value;
+    MK.filtered = d.models.filter(m => {
+      if (q && !m.model.toLowerCase().includes(q)) return false;
+      if (fam !== 'all' && m.family !== fam) return false;
+      if (MK.championsOnly && !m.is_champion) return false;
+      if (MK.hasTrades && (m.n_trades || 0) < 10) return false;
+      if (MK.tier !== 'all' && getTier(m) !== MK.tier) return false;
+      return true;
+    });
+    MK.filtered.sort((a, b) => {
+      let va, vb;
+      switch (MK.sortKey) {
+        case 'return': va = getReturn(a); vb = getReturn(b); break;
+        case 'sharpe': va = getSharpe(a); vb = getSharpe(b); break;
+        case 'hit_rate': va = a.hit_rate || 0; vb = b.hit_rate || 0; break;
+        case 'n_trades': va = a.n_trades || 0; vb = b.n_trades || 0; break;
+        case 'best_trade': va = a.best_trade_return || 0; vb = b.best_trade_return || 0; break;
+        default: va = getStreak(a); vb = getStreak(b);
+      }
+      if (va === vb) return getReturn(b) - getReturn(a);
+      return -1 * (va - vb);
+    });
+    $('mk-summary').innerHTML = `Showing <strong>${MK.filtered.length}</strong> of <strong>${d.models.length}</strong>`;
+    renderQuickStats(); renderChampions(); renderGridCards();
+  }
+
+  function renderQuickStats() {
+    const d = MK.data, all = d.models;
+    const withT = all.filter(m => (m.n_trades || 0) >= 10);
+    const champs = all.filter(m => m.is_champion);
+    const profit = withT.filter(m => getReturn(m) > 0);
+    const hot = withT.filter(m => getTier(m) === 'hot');
+    const avgRet = withT.length ? withT.reduce((s, m) => s + getReturn(m), 0) / withT.length : 0;
+    const avgShp = withT.length ? withT.reduce((s, m) => s + getSharpe(m), 0) / withT.length : 0;
+    const totalT = all.reduce((s, m) => s + (m.n_trades || 0), 0);
+    const totMins = withT.reduce((s, m) => s + (m.avg_hold_trading_minutes || 0) * (m.n_trades || 0), 0);
+    const totN = withT.reduce((s, m) => s + (m.n_trades || 0), 0);
+    const avgHold = totN > 0 ? totMins / totN : 0;
+    const stats = [
+      { v: all.length, l: 'Models', c: '' },
+      { v: withT.length, l: 'With ≥10 trades', c: '' },
+      { v: champs.length, l: 'Champions', c: '' },
+      { v: hot.length, l: '🔥 Hot tier', c: 'pos' },
+      { v: profit.length, l: 'Profitable', c: profit.length > withT.length / 2 ? 'pos' : '' },
+      { v: fmtPct(avgRet), l: `Avg return (${d.lookback_days}d)`, c: clsSign(avgRet) },
+      { v: fmtNum(avgShp, 2), l: `Avg Sharpe (${d.lookback_days}d)`, c: clsSign(avgShp) },
+      { v: totalT, l: 'Total trades', c: '' },
+      { v: fmtHold(avgHold), l: 'Avg hold', c: '' },
+    ];
+    $('mk-quick-stats').innerHTML = stats.map(s =>
+      `<div class="mk-qs"><div class="mk-qs-v ${s.c}">${s.v}</div><div class="mk-qs-l">${s.l}</div></div>`).join('');
+  }
+
+  function renderChampions() {
+    const top = [...MK.data.models].filter(m => (m.n_trades || 0) >= 10).sort((a, b) => {
+      const sa = getStreak(a), sb = getStreak(b);
+      if (sa !== sb) return sb - sa;
+      const ra = getReturn(a), rb = getReturn(b);
+      if (ra !== rb) return rb - ra;
+      return getSharpe(b) - getSharpe(a);
+    }).slice(0, 5);
+    const c = $('mk-champion-grid');
+    if (top.length === 0) { $('mk-champion-board').style.display = 'none'; return; }
+    $('mk-champion-board').style.display = 'block';
+    c.innerHTML = top.map((m, i) => {
+      const st = getStreak(m), ret = getReturn(m);
+      return `<div class="mk-cc" data-model="${esc(m.model)}">
+        <div class="mk-cc-rank">#${i + 1}  ${esc((m.family || '').replace(/_/g, ' '))}</div>
+        <div class="mk-cc-name">${esc(m.model)}</div>
+        <div class="mk-cc-meta">${st >= 0 ? st + 'W' : (-st) + 'L'} streak · ${m.n_trades || 0} trades</div>
+        <div class="mk-cc-stats"><span class="${clsSign(ret)}">${fmtPct(ret)}</span><span>Sh ${fmtNum(getSharpe(m), 2)}</span></div>
+      </div>`;
+    }).join('');
+    c.querySelectorAll('.mk-cc').forEach(card => { card.onclick = () => openDetail(card.dataset.model); });
+  }
+
+  function renderGridCards() {
+    const win = MK.data.lookback_days, c = $('mk-model-grid');
+    if (MK.filtered.length === 0) {
+      c.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--dim)">No models match current filters.</div>`;
+      return;
+    }
+    c.innerHTML = MK.filtered.map(m => cardHTML(m, win)).join('');
+    c.querySelectorAll('.mk-card').forEach(card => {
+      card.onclick = () => { if (window.getSelection().toString()) return; openDetail(card.dataset.model); };
+      card.onmouseenter = (e) => showTooltip(card, e);
+      card.onmousemove = (e) => positionTooltip(e);
+      card.onmouseleave = hideTooltip;
+    });
+  }
+
+  function cardHTML(m, win) {
+    const tier = getTier(m), ret = getReturn(m), sh = getSharpe(m), dd = getMaxDD(m);
+    const hit = m.hit_rate || 0, trades = m.n_trades || 0;
+    const best = m.best_trade_return ?? 0, worst = m.worst_trade_return ?? 0;
+    const desc = m.description?.short_desc || m.family || '';
+    const rs = m.rolling_sharpe || {}, st = getStreak(m), lastT = fmtRelative(m.last_fire_ts);
+    return `<div class="mk-card tier-${tier}" data-model="${esc(m.model)}">
+      <div class="mk-card-h"><div><div class="mk-card-name">${esc(m.model)}</div></div>
+        <div class="mk-badges">${streakBadge(st)}${championBadge(m)}</div></div>
+      <div class="mk-card-desc">${esc(desc)}</div>
+      <div class="mk-card-metrics">
+        <div class="mk-metric"><div class="mk-metric-l">Return · ${win}d</div><div class="mk-metric-v ${clsSign(ret)}">${fmtPct(ret)}</div></div>
+        <div class="mk-metric"><div class="mk-metric-l">Sharpe · ${win}d</div><div class="mk-metric-v ${clsSign(sh)}">${fmtNum(sh, 2)}</div></div>
+        <div class="mk-metric"><div class="mk-metric-l">Hit rate</div><div class="mk-metric-v">${fmtPct(hit, 1)}</div></div>
+        <div class="mk-metric"><div class="mk-metric-l">Max DD · ${win}d</div><div class="mk-metric-v ${clsSign(dd)}">${fmtPct(dd, 1)}</div></div>
+      </div>
+      <div class="mk-bw">
+        <span><span class="lbl">Best</span> <span class="pos">${fmtPct(best, 2)}</span></span>
+        <span><span class="lbl">Worst</span> <span class="neg">${fmtPct(worst, 2)}</span></span>
+        <span><span class="lbl">Trades</span> ${trades}</span>
+      </div>
+      <div class="mk-card-f">
+        <span>RS 5d ${fmtNum(rs['5d'], 1)} · 10d ${fmtNum(rs['10d'], 1)} · 30d ${fmtNum(rs['30d'], 1)}</span>
+        <span>${lastT}</span>
+      </div>
+    </div>`;
+  }
+
+  // ── tooltip ──
+  function showTooltip(card, e) {
+    const m = MK.data.models.find(x => x.model === card.dataset.model);
+    if (!m) return;
+    const desc = m.description || {}, rs = m.rolling_sharpe || {};
+    const tt = $('mk-tooltip');
+    tt.innerHTML = `<h4>${esc(m.model)}</h4>
+      <div class="mk-tt-sec"><div class="mk-tt-l">What it captures</div><div class="mk-tt-v">${esc(desc.what_it_captures || '—')}</div></div>
+      <div class="mk-tt-sec"><div class="mk-tt-l">Entry</div><div class="mk-tt-v">${esc(desc.entry || '—')}</div>
+        <div class="mk-tt-l">Exit</div><div class="mk-tt-v">${esc(desc.exit || '—')}</div></div>
+      <div class="mk-tt-sec"><div class="mk-tt-stats">
+        <div><span class="mk-tt-l">Rolling Sharpe 5/10/30d</span></div><div></div>
+        <div>${fmtNum(rs['5d'], 2)}</div><div>${fmtNum(rs['10d'], 2)} · ${fmtNum(rs['30d'], 2)}</div>
+        <div><span class="mk-tt-l">Current streak</span></div><div>${getStreak(m) >= 0 ? getStreak(m) + 'W' : (-getStreak(m)) + 'L'}</div>
+        <div><span class="mk-tt-l">Max W / L streak</span></div><div>${m.max_win_streak || 0}W / ${m.max_loss_streak || 0}L</div>
+        <div><span class="mk-tt-l">Last fire</span></div><div>${fmtRelative(m.last_fire_ts)}</div>
+      </div></div>`;
+    tt.style.display = 'block';
+    positionTooltip(e);
+  }
+  function positionTooltip(e) {
+    const tt = $('mk-tooltip');
+    if (tt.style.display === 'none') return;
+    const pad = 14, w = tt.offsetWidth, h = tt.offsetHeight;
+    let x = e.pageX + pad, y = e.pageY + pad;
+    if (x + w > window.innerWidth + window.scrollX) x = e.pageX - w - pad;
+    if (y + h > window.innerHeight + window.scrollY) y = e.pageY - h - pad;
+    tt.style.left = x + 'px'; tt.style.top = y + 'px';
+  }
+  function hideTooltip() { $('mk-tooltip').style.display = 'none'; }
+
+  // ── detail ──
+  function openDetail(modelName) {
+    hideTooltip();
+    MK.currentModel = modelName;
+    $('mk-grid').style.display = 'none';
+    $('mk-detail').style.display = 'block';
+    renderDetail(modelName);
+    $('markouts-mount').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function renderDetail(modelName) {
+    const d = MK.data, m = d.models.find(x => x.model === modelName);
+    if (!m) {
+      $('mk-detail').innerHTML = `<div style="padding:40px;color:var(--red)">Model '<strong>${esc(modelName)}</strong>' not found.
+        <br><br><span style="color:var(--gold2);cursor:pointer" id="mk-back2">← Back to grid</span></div>`;
+      const b2 = $('mk-back2'); if (b2) b2.onclick = showGrid;
+      return;
+    }
+    $('mk-detail-name').textContent = m.model;
+    $('mk-detail-desc').textContent = `${m.description?.short_desc || m.family} · ${m.horizon || 'n/a'}`;
+    const desc = m.description || {};
+    $('mk-what').textContent = desc.what_it_captures || '—';
+    $('mk-entry').textContent = desc.entry || '—';
+    $('mk-exit').textContent = desc.exit || '—';
+
+    const st = getStreak(m), badges = [];
+    if (m.is_champion) badges.push(`<span class="mk-db champion">★ Champion</span>`);
+    if (st >= 3) badges.push(`<span class="mk-db streak-hot">🔥 ${st}W streak</span>`);
+    else if (st > 0) badges.push(`<span class="mk-db streak-hot">✓ ${st}W</span>`);
+    else if (st <= -3) badges.push(`<span class="mk-db streak-cold">❄ ${-st}L streak</span>`);
+    else if (st < 0) badges.push(`<span class="mk-db streak-cold">${-st}L</span>`);
+    badges.push(`<span class="mk-db"><span class="lbl">Family</span> ${esc(m.family || '—')}</span>`);
+    badges.push(`<span class="mk-db"><span class="lbl">Horizon</span> ${esc(m.horizon || 'n/a')}</span>`);
+    badges.push(`<span class="mk-db"><span class="lbl">Trades</span> ${m.n_trades || 0}</span>`);
+    badges.push(`<span class="mk-db"><span class="lbl">Open at end</span> ${m.n_open_at_end || 0}</span>`);
+    $('mk-detail-badges').innerHTML = badges.join('');
+
+    const win = d.lookback_days, ret = getReturn(m), sh = getSharpe(m), dd = getMaxDD(m);
+    const dm = [
+      { l: 'Return', w: win, v: fmtPct(ret), c: clsSign(ret), s: `Gross ${fmtPct(m.summary?.gross?.cum_return || 0)}` },
+      { l: 'Sharpe', w: win, v: fmtNum(sh, 2), c: clsSign(sh), s: `Annualized, ${MK.slippage}` },
+      { l: 'Max DD', w: win, v: fmtPct(dd, 2), c: clsSign(dd), s: 'Peak → trough, NET' },
+      { l: 'Hit Rate', w: '', v: fmtPct(m.hit_rate || 0, 1), c: '', s: `${m.n_long || 0}L / ${m.n_short || 0}S round-trips` },
+      { l: 'Best Trade', w: '', v: fmtPct(m.best_trade_return || 0, 2), c: 'pos', s: `Max gain ${fmtMoney(m.max_gain_dollars)}` },
+      { l: 'Worst Trade', w: '', v: fmtPct(m.worst_trade_return || 0, 2), c: 'neg', s: `Max loss ${fmtMoney(m.max_loss_dollars)}` },
+      { l: 'Avg Hold', w: '', v: fmtHold(m.avg_hold_trading_minutes), c: '', s: 'Trading minutes' },
+      { l: 'N Fires', w: win, v: m.n_fires || 0, c: '', s: `${m.n_trades || 0} closed round-trips` },
+    ];
+    $('mk-detail-metrics').innerHTML = dm.map(it => `<div class="mk-dm">
+      <div class="mk-dm-l">${it.l} ${it.w ? `<span class="wtag">${it.w}d</span>` : ''}</div>
+      <div class="mk-dm-v ${it.c}">${it.v}</div><div class="mk-dm-s">${it.s}</div></div>`).join('');
+
+    const rs = m.rolling_sharpe || {};
+    $('mk-detail-strip').innerHTML = `
+      <div class="mk-strip"><h4>Rolling Sharpe (trailing window)</h4>
+        <div class="mk-rs"><span class="lbl">5-day</span><span class="val ${clsSign(rs['5d'])}">${fmtNum(rs['5d'], 2)}</span></div>
+        <div class="mk-rs"><span class="lbl">10-day</span><span class="val ${clsSign(rs['10d'])}">${fmtNum(rs['10d'], 2)}</span></div>
+        <div class="mk-rs"><span class="lbl">30-day</span><span class="val ${clsSign(rs['30d'])}">${fmtNum(rs['30d'], 2)}</span></div>
+      </div>
+      <div class="mk-strip"><h4>Streak &amp; Activity</h4>
+        <div class="mk-rs"><span class="lbl">Current streak</span><span class="val ${st > 0 ? 'pos' : (st < 0 ? 'neg' : '')}">${st >= 0 ? st + 'W' : (-st) + 'L'}</span></div>
+        <div class="mk-rs"><span class="lbl">Max win streak</span><span class="val pos">${m.max_win_streak || 0}W</span></div>
+        <div class="mk-rs"><span class="lbl">Max loss streak</span><span class="val neg">${m.max_loss_streak || 0}L</span></div>
+        <div class="mk-rs"><span class="lbl">Last fire</span><span class="val">${fmtRelative(m.last_fire_ts)}</span></div>
+      </div>`;
+
+    $('mk-chart-window').textContent = `${win}-day window · ${MK.slippage} slippage`;
+    $('mk-chart-equity').innerHTML = equitySVG(m);
+
+    const ptbl = m.per_ticker || [];
+    $('mk-ticker-tbody').innerHTML = ptbl.map(r => `<tr>
+      <td>${esc(r.ticker)}</td><td class="numeric">${r.n_trades || 0}</td>
+      <td class="numeric">${r.n_long || 0}</td><td class="numeric">${r.n_short || 0}</td>
+      <td class="numeric ${clsSign(r.cum_pnl)}">${fmtPct(r.cum_pnl, 3)}</td></tr>`).join('');
+
+    renderTradeTable(m);
+    $('mk-detail-last-fire').textContent = `Last fire: ${m.last_fire_ts ? new Date(m.last_fire_ts).toLocaleString() : '—'}`;
+    $('mk-back').onclick = showGrid;
+    $('mk-refresh-detail').onclick = () => loadData().then(() => { if (MK.currentModel) openDetail(MK.currentModel); });
+  }
+
+  // ── equity chart (inline SVG, themed) ──
+  function equitySVG(m) {
+    const eq = m[`equity_net_${MK.slippage}`] || m.equity_net_5bps || [];
+    const gross = m.equity_gross || [];
+    if (!eq.length) return `<div class="mk-chart-empty">No equity data — n_fires = ${m.n_fires || 0}</div>`;
+    const W = 760, H = 280, PT = 14, PB = 30, PL = 56, PR = 16;
+    const t0 = new Date(eq[0].date).getTime();
+    const lastN = new Date(eq[eq.length - 1].date).getTime();
+    const lastG = gross.length ? new Date(gross[gross.length - 1].date).getTime() : lastN;
+    const tSpan = Math.max(1, Math.max(lastN, lastG) - t0);
+    let vmin = Infinity, vmax = -Infinity;
+    eq.concat(gross).forEach(p => { if (p.value < vmin) vmin = p.value; if (p.value > vmax) vmax = p.value; });
+    if (!isFinite(vmin) || !isFinite(vmax)) return `<div class="mk-chart-empty">No equity data.</div>`;
+    if (vmin === vmax) { vmin -= 0.01; vmax += 0.01; }
+    const padv = (vmax - vmin) * 0.08; vmin -= padv; vmax += padv;
+    const x = (ts) => PL + ((new Date(ts).getTime() - t0) / tSpan) * (W - PL - PR);
+    const y = (v) => PT + (1 - (v - vmin) / (vmax - vmin)) * (H - PT - PB);
+    const path = (arr) => arr.map((p, i) => `${i ? 'L' : 'M'}${x(p.date).toFixed(1)},${y(p.value).toFixed(1)}`).join(' ');
+    const base = eq[0].value;
+    const gridVals = [vmin + (vmax - vmin) * 0.25, vmin + (vmax - vmin) * 0.5, vmin + (vmax - vmin) * 0.75];
+    const grid = gridVals.map(v => `<line x1="${PL}" y1="${y(v).toFixed(1)}" x2="${W - PR}" y2="${y(v).toFixed(1)}" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="2,3"/>
+      <text x="${PL - 5}" y="${(y(v) + 3).toFixed(1)}" text-anchor="end" fill="var(--dim)" font-size="9" font-family="monospace">${v.toFixed(3)}</text>`).join('');
+    const baseLine = (base >= vmin && base <= vmax)
+      ? `<line x1="${PL}" y1="${y(base).toFixed(1)}" x2="${W - PR}" y2="${y(base).toFixed(1)}" stroke="var(--dim)" stroke-width="0.8" stroke-dasharray="4,3" opacity="0.6"/>` : '';
+    const fmtD = (ts) => { const d = new Date(ts); return `${d.getMonth() + 1}/${d.getDate()}`; };
+    const grossLine = gross.length ? `<path d="${path(gross)}" fill="none" stroke="var(--blue)" stroke-width="1" stroke-dasharray="3,2" opacity="0.8"/>` : '';
+    return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="aspect-ratio:${W}/${H}">
+      ${grid}${baseLine}
+      ${grossLine}
+      <path d="${path(eq)}" fill="none" stroke="var(--gold2)" stroke-width="1.8"/>
+      <text x="${PL}" y="${H - 8}" fill="var(--dim)" font-size="9" font-family="monospace">${fmtD(eq[0].date)}</text>
+      <text x="${W - PR}" y="${H - 8}" text-anchor="end" fill="var(--dim)" font-size="9" font-family="monospace">${fmtD(eq[eq.length - 1].date)}</text>
+      <text x="${W - PR}" y="${PT + 2}" text-anchor="end" fill="var(--gold2)" font-size="10" font-family="monospace">Net (${MK.slippage})</text>
+      ${gross.length ? `<text x="${W - PR}" y="${PT + 16}" text-anchor="end" fill="var(--blue)" font-size="10" font-family="monospace">Gross</text>` : ''}
+    </svg>`;
+  }
+
+  // ── trade table ──
+  function renderTradeTable(m) {
+    $('mk-trade-count').textContent = (m.all_trades || []).length;
+    document.querySelectorAll('.mk-tf-btn').forEach(b => {
+      b.onclick = () => {
+        document.querySelectorAll('.mk-tf-btn').forEach(x => x.classList.remove('active'));
+        b.classList.add('active'); MK.tradeFilter = b.dataset.tf; renderTradeRows(m);
+      };
+    });
+    document.querySelectorAll('#mk-trade-table th.mk-sortable').forEach(th => {
+      th.onclick = () => {
+        const k = th.dataset.tc;
+        if (MK.tradeSortKey === k) MK.tradeSortDir = MK.tradeSortDir === 'asc' ? 'desc' : 'asc';
+        else { MK.tradeSortKey = k; MK.tradeSortDir = 'desc'; }
+        renderTradeRows(m);
+      };
+    });
+    renderTradeRows(m);
+  }
+
+  function renderTradeRows(m) {
+    let rows = m.all_trades || [];
+    switch (MK.tradeFilter) {
+      case 'long': rows = rows.filter(t => t.direction === 'long'); break;
+      case 'short': rows = rows.filter(t => t.direction === 'short'); break;
+      case 'wins': rows = rows.filter(t => t.return_pct > 0); break;
+      case 'losses': rows = rows.filter(t => t.return_pct < 0); break;
+    }
+    const k = MK.tradeSortKey, mul = MK.tradeSortDir === 'asc' ? 1 : -1;
+    rows = [...rows].sort((a, b) => {
+      let va = a[k], vb = b[k];
+      if (va === null || va === undefined) va = -Infinity;
+      if (vb === null || vb === undefined) vb = -Infinity;
+      if (typeof va === 'string' && typeof vb === 'string') return mul * va.localeCompare(vb);
+      return mul * ((va < vb) ? -1 : (va > vb ? 1 : 0));
+    });
+    document.querySelectorAll('#mk-trade-table th.mk-sortable').forEach(th => {
+      th.classList.remove('sort-asc', 'sort-desc');
+      if (th.dataset.tc === k) th.classList.add(MK.tradeSortDir === 'asc' ? 'sort-asc' : 'sort-desc');
+    });
+    const html = rows.map(t => {
+      const rc = t.return_pct > 0 ? 'win' : (t.return_pct < 0 ? 'loss' : '');
+      return `<tr>
+        <td>${fmtTs(t.exit_time)}</td><td>${esc(t.ticker)}</td>
+        <td class="dir-${t.direction}">${t.direction === 'long' ? 'L' : 'S'}</td>
+        <td class="numeric">${fmtNum(t.entry_score, 1)}</td><td class="numeric">${fmtNum(t.exit_score, 1)}</td>
+        <td class="numeric">${fmtPrice(t.entry_price)}</td><td class="numeric">${fmtPrice(t.exit_price)}</td>
+        <td class="numeric">${fmtHold(t.hold_minutes)}</td><td class="numeric">${fmtMoney(t.capital_used)}</td>
+        <td class="numeric ${rc}">${fmtPct(t.return_pct, 2)}</td><td class="numeric ${rc}">${fmtMoney(t.return_dollars)}</td>
+        <td>${esc((t.exit_reason || '').replace(/_/g, ' '))}</td></tr>`;
+    }).join('');
+    $('mk-trade-tbody').innerHTML = html || `<tr><td colspan="12" style="text-align:center;padding:20px;color:var(--dim)">No trades match this filter.</td></tr>`;
+  }
+
+  // ── public ──
+  MK.ensureLoaded = function () { if (MK.loaded || MK.loading) return; loadData(); };
+  window.MK = MK;
+})();
+</script>
 
 <!-- v28.5: universal data-freshness widget. Posts top-right chip showing
      age of every critical JSON feed. Color-coded; collapsible. Same
